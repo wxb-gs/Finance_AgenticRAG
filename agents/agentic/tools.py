@@ -144,6 +144,23 @@ _META_TOOL_DEFS = [
         },
     ),
     ToolMeta(
+        name="activate_skill",
+        category="meta",
+        description="Activate a domain skill to get specialized workflow guidance. Call when the query matches a skill's description.",
+        when_to_use="查询涉及特定领域（财报分析、风险评估、对比分析）且需要专业工作流指引",
+        when_not_to_use="简单查询不需要专业领域知识时",
+        parameters={
+            "type": "object",
+            "properties": {
+                "skill_name": {
+                    "type": "string",
+                    "description": "Name of the skill to activate (e.g. financial-statement-analysis)",
+                },
+            },
+            "required": ["skill_name"],
+        },
+    ),
+    ToolMeta(
         name="plan_steps",
         category="meta",
         description="Create a structured task plan for complex multi-step queries.",
@@ -281,7 +298,7 @@ class ToolRegistry:
         elif name == "read_chunk":
             return self._exec_read_chunk(call)
         # 元工具 — 返回 sentinel 标记，由 Agent 循环处理
-        elif name in ("dispatch_subagent", "remember", "plan_steps"):
+        elif name in ("dispatch_subagent", "activate_skill", "remember", "plan_steps"):
             return ToolResult(
                 call_id=call.id,
                 tool_name=name,

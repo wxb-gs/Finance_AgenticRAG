@@ -43,7 +43,7 @@ class Agent:
             )
 
         # 1. 组装 System Prompt
-        system_prompt = self.skills.build_system_prompt(query, self.language)
+        system_prompt = self.skills.build_system_prompt(self.language)
         if memory_context:
             system_prompt += memory_context
 
@@ -115,6 +115,24 @@ class Agent:
                             content=json.dumps(sub_result, ensure_ascii=False),
                         )
                         state.subagent_count += 1
+                        state.add_tool_call(call, result)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": result.content,
+                        })
+
+                    elif call.name == "activate_skill":
+                        skill = self.skills.activate(call.args.get("skill_name", ""))
+                        result = ToolResult(
+                            call_id=call.id, tool_name=call.name,
+                            success=skill is not None,
+                            content=(
+                                f"技能 '{skill.name}' 已激活：\n\n{skill.content}"
+                                if skill
+                                else f"未找到技能：{call.args.get('skill_name')}"
+                            ),
+                        )
                         state.add_tool_call(call, result)
                         messages.append({
                             "role": "tool",

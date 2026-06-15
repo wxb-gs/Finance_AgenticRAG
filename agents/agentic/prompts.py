@@ -181,6 +181,7 @@ def get_tool_descriptions(language: str = "zh") -> str:
 | hybrid_search | 高召回场景，多方法融合 | 简单单步查询 |
 | read_chunk | 已知 chunk_id 需要完整文本 | 没有 ID 的检索 |
 | dispatch_subagent | 可拆分为 2+ 独立子任务 | 简单单步、强依赖任务 |
+| activate_skill | 查询匹配某技能领域时激活 | 简单查询无需专业指引 |
 | remember | 发现关键证据、矛盾点 | 常规检索结果 |
 | plan_steps | 3+ 步的复杂任务 | 简单 1-2 步查询 |
 | finish | 完成回答 | — |
@@ -199,6 +200,7 @@ You have the following tools. Choose the most suitable one for each scenario:
 | hybrid_search | High recall, multi-method fusion | Simple single-step |
 | read_chunk | Known chunk_id, need full text | Searches without IDs |
 | dispatch_subagent | 2+ independent subtasks | Simple or tightly-dependent tasks |
+| activate_skill | Query matches a skill domain | Simple queries, no domain guidance needed |
 | remember | Key evidence, contradictions found | Routine search results |
 | plan_steps | 3+ step complex tasks | Simple 1-2 step queries |
 | finish | Complete answer | — |
