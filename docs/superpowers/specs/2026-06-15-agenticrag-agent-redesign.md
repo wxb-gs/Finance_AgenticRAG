@@ -19,7 +19,6 @@
 ### 非目标（一期）
 
 - MCP 协议客户端（预留接口，不做实现）
-- Skills 语义匹配（用关键词匹配替代）
 - Memory 语义检索（用关键词得分替代）
 - 基于路由模型的智能分发
 
@@ -68,7 +67,7 @@ agents/
   │   ├── agent.py                # ReAct 主循环 + Agent 类
   │   ├── tools.py                # 工具注册表（内置 + MCP接口）
   │   ├── sub_agent.py            # 子代理类型 + 派发管理
-  │   ├── skills.py               # Skills 注册 + 匹配 + Prompt注入
+  │   ├── skills/                 # Skills 子包（每技能一个文件夹）
   │   ├── context.py              # 上下文压缩（三层策略）
   │   ├── memory.py               # 记忆持久化
   │   ├── prompts.py              # System Prompt 模板
@@ -143,6 +142,7 @@ while iteration < max_iterations:
 |------|------|-----------------|
 | dispatch_subagent | 派生子代理独立执行子任务 | Agent 工具 |
 | remember | 保存关键证据/矛盾到持久记忆 | Memory 系统 |
+| activate_skill | 模型根据描述自主激活领域技能 | Skill 工具 |
 | plan_steps | 创建结构化任务追踪 | TaskCreate |
 
 **第三层：生命周期工具（lifecycle）**
@@ -176,21 +176,54 @@ while iteration < max_iterations:
 
 **小模型降级：** 小模型 (7B-14B) 模式下 dispatch_subagent 不可用，改为串行推理。
 
-### 4.5 Skills 系统 (`skills.py`)
+### 4.5 Skills 系统 (`skills/`)
 
-Skill = 一段注入到 System Prompt 的专业指令 + 可选的受限工具列表 + 触发条件。
+参照 Claude Code 的 Skill 架构：每技能一个文件夹，内含 `SKILL.md`。模型通过 `description` 自主判断激活，不做关键词匹配。
+
+**目录结构：**
+```
+skills/
+  __init__.py                           # 导出 Skill, SkillManager, load_skills
+  loader.py                             # Skill dataclass + 目录扫描 + 激活逻辑
+  financial-statement-analysis/
+    SKILL.md                            # name + description (frontmatter) + 工作流指引
+  risk-assessment/
+    SKILL.md
+  multi-hop-comparison/
+    SKILL.md
+```
+
+**SKILL.md 格式（YAML frontmatter + Markdown body）：**
+```markdown
+---
+name: financial-statement-analysis
+description: >
+  深度解析财报三大表，计算关键财务比率。当查询涉及公司财务数据、
+  营收、净利润等财务指标时，应激活此技能。
+---
+
+# 财务报表分析
+...工作流指引...
+```
+
+**激活机制：**
+1. System Prompt 中列出所有技能摘要（`get_listing_text()` → `name: description`）
+2. 模型根据 description 判断是否匹配当前查询
+3. 匹配合适时，模型调用 `activate_skill(skill_name="...")` 工具
+4. Agent 将技能完整内容注入对话，模型获得专业工作流指引
 
 **一期 Skills：**
 
-| Skill | 触发关键词 | 核心行为 |
-|-------|-----------|----------|
-| financial-statement-analysis | 财报、营收、净利润、ROE、资产负债... | 交叉验证、比率计算、趋势判断 |
-| risk-assessment | 风险、违约、担保、诉讼、ST、退市... | 风险分类、对立分析、量化评分 |
-| multi-hop-comparison | 对比、比较、差异、排名、优于、不如 | 并行子代理获取、表格输出 |
+| Skill | 描述要点 | 核心行为 |
+|-------|---------|----------|
+| financial-statement-analysis | 财报三大表、财务比率计算、盈利能力分析 | 交叉验证、比率计算、趋势判断 |
+| risk-assessment | 财务/经营/合规/市场风险评估 | 风险分类、对立分析、量化评分 |
+| multi-hop-comparison | 跨公司/跨时间段对比分析、多指标排名 | 并行子代理获取、表格输出 |
 
-**匹配机制：** 关键词匹配（一期）；语义匹配（后续迭代）。
-
-**System Prompt 组装：** 基础模板 + 匹配的 Skills 扩展指令。小模型最多激活 1 个 Skill。
+**设计原则：**
+- 模型自主决策：不做关键词/语义匹配，完全依赖模型对 description 的理解
+- 添加新技能只需新建文件夹 + SKILL.md，零 Python 代码修改
+- 技能内容仅在激活时注入，不浪费上下文窗口
 
 ### 4.6 上下文压缩 (`context.py`)
 
@@ -284,7 +317,7 @@ System Prompt 是 Agent 的唯一行为来源，包含以下段落结构：
 | Tool Layer (Bash/Read/Write) | tools.py (检索/元/生命周期) |
 | Agent tool (子代理派发) | dispatch_subagent + SubAgentType |
 | MCP protocol (外部工具) | mcp_client.py 接口 (预留) |
-| Skills (领域行为扩展) | skills.py + 关键词匹配 |
+| Skills (领域行为扩展) | skills/ 子包 + activate_skill 工具 + 模型自主激活 |
 | Memory (持久记忆) | memory.py (四类型) |
 | Context auto-compression | context.py (三层策略) |
 | TaskCreate/TaskList | plan_steps 元工具 |
@@ -299,7 +332,6 @@ System Prompt 是 Agent 的唯一行为来源，包含以下段落结构：
 | MCP 工具描述质量差 | 中 | 中 | 启动时校验，缺失描述自动生成 |
 | 评估尺度不一致 | 低 | 中 | 同一 judge 模型 + 同一 prompt |
 | Memory 膨胀 | 低 | 低 | 过期清理 + 矛盾合并 + 频次衰减 |
-| Skills 关键词匹配粗糙 | 中 | 低 | 二期用语义匹配替代 |
 
 ## 8. 文件清单
 
@@ -308,7 +340,9 @@ System Prompt 是 Agent 的唯一行为来源，包含以下段落结构：
 - `agents/agentic/agent.py`
 - `agents/agentic/tools.py`
 - `agents/agentic/sub_agent.py`
-- `agents/agentic/skills.py`
+- `agents/agentic/skills/__init__.py`
+- `agents/agentic/skills/loader.py`
+- `agents/agentic/skills/{name}/SKILL.md` (每个技能一个文件夹)
 - `agents/agentic/context.py`
 - `agents/agentic/memory.py`
 - `agents/agentic/types.py`
