@@ -40,3 +40,15 @@ ACTIVE_INDEX_DIR = NEWS_INDEX_DIR or INDEX_DIR
 for d in [DATA_DIR, INDEX_DIR, RESULTS_DIR, TMP_DIR, ACTIVE_DATA_DIR, ACTIVE_INDEX_DIR]:
     if d:
         os.makedirs(d, exist_ok=True)
+
+# ── Agentic Agent 配置 ──
+AGENT_CONFIG = {
+    "default_mode": "agent",         # pev | agent | compare
+    "agent_model": os.environ.get("AGENT_LLM_MODEL", "Qwen3-32B"),
+    "agent_model_size": os.environ.get("AGENT_MODEL_SIZE", "large"),
+    "agent_language": os.environ.get("PROMPT_LANG", "zh"),
+    "agent_max_iterations": int(os.environ.get("AGENT_MAX_ITERATIONS", "15")),
+    "agent_enable_subagents": os.environ.get("AGENT_ENABLE_SUBAGENTS", "true").lower() == "true",
+    "pev_enable_verifier": True,
+    "pev_enabled_tools": None,
+}

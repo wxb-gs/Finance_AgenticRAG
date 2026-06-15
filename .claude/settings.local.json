@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from agents.agentic.types import AgentState, ToolMeta, ToolCall, ToolResult, AgentResult, CompressionEvent, SubAgentConfig; print\\('types OK'\\)\")",
+      "Bash(python -c ' *)",
+      "Bash(python -m pytest tests/test_agentic.py -v --tb=short)"
+    ]
+  }
+}

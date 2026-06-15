@@ -53,7 +53,7 @@ def run_full_eval(
     """运行完整评测"""
     import config as cfg
     import llm.client as llm_client
-    from agents.graph import build_graph
+    from agents.pev.graph import build_graph
     from evaluation.metrics import exact_match, f1_score, CostTracker
     from evaluation.hop_aware_eval import diagnose_failure, aggregate_diagnostics
 

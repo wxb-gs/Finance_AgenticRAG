@@ -14,6 +14,7 @@ app = FastAPI(title="AgenticRAG Demo", version="1.0")
 class QueryRequest(BaseModel):
     question: str
     verbose: bool = False
+    mode: str = "agent"
 
 
 class QueryResponse(BaseModel):
@@ -24,11 +25,12 @@ class QueryResponse(BaseModel):
     evidence_summary: list[dict]
     trace: list[dict]
     latency: float
+    metadata: dict = {}
 
 
 @app.post("/query", response_model=QueryResponse)
 def query_endpoint(req: QueryRequest):
-    from agents.graph import run_query
+    from agents.pev.graph import run_query
     from llm.client import stats
 
     stats.reset()
@@ -60,7 +62,46 @@ def query_endpoint(req: QueryRequest):
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    from config import AGENT_CONFIG
+    return {
+        "status": "ok",
+        "pev_available": True,
+        "agent_available": True,
+        "mode": AGENT_CONFIG.get("default_mode", "agent"),
+        "agent_model_size": AGENT_CONFIG.get("agent_model_size", "large"),
+    }
+
+
+@app.post("/query/agent", response_model=QueryResponse)
+def query_agent_endpoint(req: QueryRequest):
+    """显式 Agent 模式"""
+    from pipeline_router import PipelineRouter
+    from config import AGENT_CONFIG
+    from llm.client import stats
+
+    stats.reset()
+    router = PipelineRouter(AGENT_CONFIG)
+    result = router.run(query=req.question, mode="agent")
+
+    return QueryResponse(
+        answer=result["answer"],
+        query_type="agent",
+        iteration_count=result["iterations"],
+        total_tool_calls=result["total_tool_calls"],
+        evidence_summary=result.get("metadata", {}).get("evidence_summary", []),
+        trace=result["trace"],
+        latency=result["latency_ms"] / 1000,
+    )
+
+
+@app.post("/query/compare")
+def query_compare_endpoint(req: QueryRequest):
+    """对比模式：同时跑 PEV 和 Agent"""
+    from pipeline_router import PipelineRouter
+    from config import AGENT_CONFIG
+
+    router = PipelineRouter(AGENT_CONFIG)
+    return router.run(query=req.question, mode="compare")
 
 
 if __name__ == "__main__":

@@ -59,7 +59,7 @@ def run_ablation(config_name: str, qa_pairs: list, max_samples: int = 50,
                   use_llm_judge: bool = False, model: str | None = None,
                   workers: int = 1, resume: bool = False) -> dict:
     """运行单个消融配置（支持多线程 + checkpoint + tqdm）"""
-    from agents.graph import build_graph
+    from agents.pev.graph import build_graph
     from evaluation.metrics import exact_match, f1_score, CostTracker
     from evaluation.hop_aware_eval import diagnose_failure, aggregate_diagnostics
 

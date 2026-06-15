@@ -16,12 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from langgraph.graph import StateGraph, END
 
-from agents.state import AgentState
-from agents.router import route_query, route_decision
-from agents.planner import plan
-from agents.executor import execute_step, should_continue_executing
-from agents.verifier import verify, after_verification
-from agents.synthesizer import synthesize, simple_rag
+from agents.pev.state import AgentState
+from agents.pev.router import route_query, route_decision
+from agents.pev.planner import plan
+from agents.pev.executor import execute_step, should_continue_executing
+from agents.pev.verifier import verify, after_verification
+from agents.pev.synthesizer import synthesize, simple_rag
 
 
 def build_graph(enable_verifier: bool = True, enabled_tools: list[str] | None = None):
@@ -32,7 +32,7 @@ def build_graph(enable_verifier: bool = True, enabled_tools: list[str] | None = 
         enabled_tools: 允许使用的工具列表（消融实验用）
     """
     # 配置 executor 工具集（每次先恢复完整工具再过滤）
-    from agents.executor import TOOL_REGISTRY, _ensure_tools, _ALL_TOOLS
+    from agents.pev.executor import TOOL_REGISTRY, _ensure_tools, _ALL_TOOLS
     _ensure_tools()
     TOOL_REGISTRY.clear()
     if enabled_tools is not None:

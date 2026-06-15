@@ -3,8 +3,8 @@ import sys, os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from llm.client import agent_chat_json
-from agents.state import AgentState
-from agents.prompts import get_profile
+from agents.pev.state import AgentState
+from agents.pev.prompts import get_profile
 
 TOOL_DESCRIPTIONS = {
     "keyword_search": "BM25 keyword search, good for exact names/entities",
@@ -33,7 +33,7 @@ def plan(state: AgentState) -> AgentState:
         )
 
     # 动态生成可用工具列表（消融实验时 TOOL_REGISTRY 可能被过滤）
-    from agents.executor import TOOL_REGISTRY, _ensure_tools
+    from agents.pev.executor import TOOL_REGISTRY, _ensure_tools
     _ensure_tools()
     tools_section = "\n".join(
         f"- {name}: {TOOL_DESCRIPTIONS.get(name, 'search tool')}"

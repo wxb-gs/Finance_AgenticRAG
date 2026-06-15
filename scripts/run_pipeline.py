@@ -7,7 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def run_single(query: str, verbose: bool = True) -> dict:
-    from agents.graph import run_query
+    from agents.pev.graph import run_query
     from llm.client import stats
 
     stats.reset()

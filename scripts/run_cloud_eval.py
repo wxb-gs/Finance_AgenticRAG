@@ -170,7 +170,7 @@ def main():
         print(f"[eval] Resumed: {len(existing)} completed samples")
 
     # 构建 graph（只一次）
-    from agents.graph import build_graph
+    from agents.pev.graph import build_graph
     print("[eval] Building graph...")
     app = build_graph(
         enable_verifier=True,
