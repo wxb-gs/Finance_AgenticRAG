@@ -440,6 +440,19 @@ class ToolRegistry:
             raw=results, is_empty=len(results) == 0,
         )
 
+    def _run_async(self, coro):
+        """Run async coroutine safely from either sync or async context."""
+        import asyncio
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(coro)
+        else:
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coro)
+                return future.result(timeout=60)
+
     def _exec_mcp(self, call: ToolCall) -> ToolResult:
         """执行 MCP 工具调用 — mcp__<server>__<tool_name>"""
         parts = call.name.split("__", 2)
@@ -456,8 +469,7 @@ class ToolRegistry:
                 content=f"MCP server {server_name!r} not connected.",
             )
         try:
-            import asyncio
-            result = asyncio.run(client.call_tool(tool_name, call.args))
+            result = self._run_async(client.call_tool(tool_name, call.args))
             content = json.dumps(result.get("content", result), ensure_ascii=False)
             return ToolResult(
                 call_id=call.id, tool_name=call.name, success=True,
@@ -482,10 +494,8 @@ class ToolRegistry:
                 content="No SQLite MCP server configured. Add 'sqlite_default' to MCP_SERVERS.",
             )
 
-        import asyncio
-
         try:
-            desc_result = asyncio.run(
+            desc_result = self._run_async(
                 sqlite_client.call_tool("describe_table", {"table": table_name})
             )
             columns = desc_result.get("content", [])
@@ -517,7 +527,7 @@ class ToolRegistry:
         sql = sql.rstrip(";")
 
         try:
-            exec_result = asyncio.run(
+            exec_result = self._run_async(
                 sqlite_client.call_tool("sql_query", {"sql": sql})
             )
             rows = exec_result.get("content", [])
