@@ -94,6 +94,32 @@ _RETRIEVAL_TOOL_DEFS = [
         },
         priority=2,
     ),
+    ToolMeta(
+        name="text_to_sql",
+        category="retrieval",
+        description="Convert natural language to SQL, execute via SQLite MCP, return structured results. Requires a target table name from prior retrieval.",
+        when_to_use="检索到表格 chunk 后，需要查表、聚合计算、条件筛选、排序",
+        when_not_to_use="纯文本检索即可回答、无表格 chunk 可用",
+        parameters={
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "Natural language question about the table data",
+                },
+                "table_name": {
+                    "type": "string",
+                    "description": "Target table name (from previously retrieved chunk)",
+                },
+                "chunk_context": {
+                    "type": "string",
+                    "description": "Relevant chunk text containing schema hints (optional)",
+                },
+            },
+            "required": ["question", "table_name"],
+        },
+        priority=9,
+    ),
 ]
 
 # ══════════════════════════════════════════════════════════════════
@@ -227,6 +253,7 @@ class ToolRegistry:
         self.model_size = model_size
         self._builtin: dict[str, ToolMeta] = {}
         self._mcp: dict[str, Any] = {}
+        self._mcp_clients: dict[str, Any] = {}
         self._skill_provided: dict[str, ToolMeta] = {}
         self._register_all()
 
@@ -273,9 +300,38 @@ class ToolRegistry:
         meta = self.get_meta(name)
         return meta is not None and meta.category == "retrieval"
 
-    def discover_mcp(self, servers: list[str] | None = None):
-        """预留 MCP 工具发现接口（一期不实现）"""
-        pass
+    async def discover_mcp(self, servers: list[dict] | None = None):
+        """连接 MCP Server，发现并注册工具"""
+        if servers is None:
+            servers = []
+        from mcp.client import MCPClient
+        from mcp.transports.stdio import StdioTransport
+        from mcp.transports.http import HttpTransport
+
+        for cfg in servers:
+            name = cfg["name"]
+            transport_type = cfg.get("transport", "stdio")
+
+            if transport_type == "stdio":
+                transport = StdioTransport(
+                    command=cfg["command"],
+                    cwd=cfg.get("cwd"),
+                )
+                await transport.start()
+            elif transport_type == "http":
+                transport = HttpTransport(
+                    url=cfg["url"],
+                    headers=cfg.get("headers"),
+                )
+            else:
+                raise ValueError(f"Unknown transport: {transport_type}")
+
+            client = MCPClient(name, transport)
+            await client.connect()
+            self._mcp_clients[name] = client
+            for tool_name, tool_schema in client.tools.items():
+                mcp_name = f"mcp__{name}__{tool_name}"
+                self._mcp[mcp_name] = tool_schema
 
     # ══════════════════════════════════════════════════════════════
     # 工具执行
@@ -297,6 +353,9 @@ class ToolRegistry:
             return self._exec_hybrid_search(call)
         elif name == "read_chunk":
             return self._exec_read_chunk(call)
+        # MCP 工具 — 外部 MCP Server
+        elif name.startswith("mcp__"):
+            return self._exec_mcp(call)
         # 元工具 — 返回 sentinel 标记，由 Agent 循环处理
         elif name in ("dispatch_subagent", "activate_skill", "remember", "plan_steps"):
             return ToolResult(
@@ -379,6 +438,102 @@ class ToolRegistry:
             call_id=call.id, tool_name=call.name, success=bool(results),
             content=results[0].get("text", "") if results else "Chunk not found",
             raw=results, is_empty=len(results) == 0,
+        )
+
+    def _exec_mcp(self, call: ToolCall) -> ToolResult:
+        """执行 MCP 工具调用 — mcp__<server>__<tool_name>"""
+        parts = call.name.split("__", 2)
+        if len(parts) != 3:
+            return ToolResult(
+                call_id=call.id, tool_name=call.name, success=False,
+                content=f"Invalid MCP tool name: {call.name}. Expected: mcp__<server>__<tool>",
+            )
+        _, server_name, tool_name = parts
+        client = self._mcp_clients.get(server_name)
+        if client is None:
+            return ToolResult(
+                call_id=call.id, tool_name=call.name, success=False,
+                content=f"MCP server {server_name!r} not connected.",
+            )
+        try:
+            import asyncio
+            result = asyncio.run(client.call_tool(tool_name, call.args))
+            content = json.dumps(result.get("content", result), ensure_ascii=False)
+            return ToolResult(
+                call_id=call.id, tool_name=call.name, success=True,
+                content=content, raw=result.get("content"),
+            )
+        except Exception as e:
+            return ToolResult(
+                call_id=call.id, tool_name=call.name, success=False,
+                content=f"MCP error: {e}",
+            )
+
+    def _exec_text_to_sql(self, call: ToolCall) -> ToolResult:
+        """Text-to-SQL: NL question → schema lookup → SQL generation → execution"""
+        question = call.args["question"]
+        table_name = call.args["table_name"]
+        chunk_context = call.args.get("chunk_context", "")
+
+        sqlite_client = self._mcp_clients.get("sqlite_default")
+        if sqlite_client is None:
+            return ToolResult(
+                call_id=call.id, tool_name=call.name, success=False,
+                content="No SQLite MCP server configured. Add 'sqlite_default' to MCP_SERVERS.",
+            )
+
+        import asyncio
+
+        try:
+            desc_result = asyncio.run(
+                sqlite_client.call_tool("describe_table", {"table": table_name})
+            )
+            columns = desc_result.get("content", [])
+        except Exception as e:
+            return ToolResult(
+                call_id=call.id, tool_name=call.name, success=False,
+                content=f"Failed to describe table {table_name!r}: {e}",
+            )
+
+        schema_text = "\n".join(
+            f"  {c['name']} {c['type']}{' NOT NULL' if not c.get('nullable', True) else ''}"
+            for c in columns
+        )
+
+        sql_prompt = (
+            "You are a SQLite SQL expert. Write a valid SQLite SELECT query.\n"
+            "Output ONLY the SQL, no explanation, no markdown.\n\n"
+            f"Table: {table_name}\n"
+            f"Schema:\n{schema_text}\n"
+        )
+        if chunk_context:
+            sql_prompt += f"\nContext from retrieved chunks:\n{chunk_context[:1000]}\n"
+        sql_prompt += f"\nQuestion: {question}\n"
+        sql_prompt += "\nSQL:"
+
+        from llm.client import agent_chat
+        sql = agent_chat(sql_prompt).strip()
+        sql = sql.removeprefix("```sql").removeprefix("```").removesuffix("```").strip()
+        sql = sql.rstrip(";")
+
+        try:
+            exec_result = asyncio.run(
+                sqlite_client.call_tool("sql_query", {"sql": sql})
+            )
+            rows = exec_result.get("content", [])
+        except Exception as e:
+            return ToolResult(
+                call_id=call.id, tool_name=call.name, success=False,
+                content=f"SQL execution failed: {e}\nGenerated SQL: {sql}",
+            )
+
+        output = f"SQL: {sql}\nRows: {len(rows)}\n"
+        if rows:
+            output += "Results:\n" + json.dumps(rows, ensure_ascii=False, indent=2)
+
+        return ToolResult(
+            call_id=call.id, tool_name=call.name, success=True,
+            content=output, raw=rows, is_empty=len(rows) == 0,
         )
 
     def _format_results(self, results: list[dict[str, Any]]) -> str:
