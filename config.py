@@ -52,3 +52,23 @@ AGENT_CONFIG = {
     "pev_enable_verifier": True,
     "pev_enabled_tools": None,
 }
+
+# ── MCP Client 配置 ──
+MCP_SERVERS = [
+    {
+        "name": "sqlite_default",
+        "transport": "stdio",
+        "command": ["python", "-m", "mcp.servers.sqlite_server"],
+        "args": ["--db", os.path.join(DATA_DIR, "sqlite", "default.db")],
+    },
+]
+
+# 环境变量覆盖 MCP 配置
+_mcp_override = os.environ.get("MCP_SERVERS_CONFIG")
+if _mcp_override:
+    import json as _json
+    if _mcp_override.endswith(".json"):
+        with open(_mcp_override) as _f:
+            MCP_SERVERS = _json.load(_f)
+    else:
+        MCP_SERVERS = _json.loads(_mcp_override)
