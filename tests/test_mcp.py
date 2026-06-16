@@ -71,3 +71,70 @@ class TestHttpTransport:
         t = HttpTransport(url="http://example.com/mcp", headers={"Authorization": "Bearer x"})
         assert t.url == "http://example.com/mcp"
         assert t.headers["Authorization"] == "Bearer x"
+
+
+def _write_mock_server(code: str) -> str:
+    """Write a mock MCP server script to a temp file. Returns the file path."""
+    import tempfile
+    tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False)
+    tmp.write(code)
+    tmp.close()
+    return tmp.name
+
+
+class TestMCPClient:
+    @pytest.mark.asyncio
+    async def test_client_connect_and_list_tools(self):
+        from mcp.client import MCPClient
+        from mcp.transports.stdio import StdioTransport
+
+        server_path = _write_mock_server("""import sys, json
+for _ in range(2):
+    req = json.loads(sys.stdin.readline())
+    if req.get("method") == "initialize":
+        resp = {"jsonrpc": "2.0", "id": req["id"], "result": {"protocolVersion": "0.1.0", "serverInfo": {"name": "test"}, "capabilities": {}}}
+    elif req.get("method") == "tools/list":
+        resp = {"jsonrpc": "2.0", "id": req["id"], "result": {"tools": [{"name": "ping", "description": "Test ping", "inputSchema": {"type": "object", "properties": {}}}]}}
+    print(json.dumps(resp), flush=True)
+""")
+        try:
+            cmd = [sys.executable, server_path]
+            transport = StdioTransport(command=cmd)
+            await transport.start()
+            client = MCPClient("test_server", transport)
+            await client.connect()
+            assert "ping" in client.tools
+            assert client.tools["ping"]["description"] == "Test ping"
+            await client.close()
+        finally:
+            os.unlink(server_path)
+
+    @pytest.mark.asyncio
+    async def test_client_call_tool(self):
+        from mcp.client import MCPClient
+        from mcp.transports.stdio import StdioTransport
+
+        server_path = _write_mock_server("""import sys, json
+req = json.loads(sys.stdin.readline())
+resp = {"jsonrpc": "2.0", "id": req["id"], "result": {"protocolVersion": "0.1.0", "serverInfo": {"name": "t"}, "capabilities": {}}}
+print(json.dumps(resp), flush=True)
+
+req = json.loads(sys.stdin.readline())
+resp = {"jsonrpc": "2.0", "id": req["id"], "result": {"tools": [{"name": "add", "description": "Add two numbers", "inputSchema": {"type": "object", "properties": {"a": {"type": "number"}, "b": {"type": "number"}}}}]}}
+print(json.dumps(resp), flush=True)
+
+req = json.loads(sys.stdin.readline())
+resp = {"jsonrpc": "2.0", "id": req["id"], "result": {"content": [{"type": "text", "text": "7"}]}}
+print(json.dumps(resp), flush=True)
+""")
+        try:
+            cmd = [sys.executable, server_path]
+            transport = StdioTransport(command=cmd)
+            await transport.start()
+            client = MCPClient("test_server", transport)
+            await client.connect()
+            result = await client.call_tool("add", {"a": 3, "b": 4})
+            assert "7" in str(result)
+            await client.close()
+        finally:
+            os.unlink(server_path)
