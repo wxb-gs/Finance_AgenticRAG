@@ -138,3 +138,109 @@ print(json.dumps(resp), flush=True)
             await client.close()
         finally:
             os.unlink(server_path)
+
+
+class TestSQLiteMCPServer:
+    @pytest.mark.asyncio
+    async def test_list_tables(self):
+        from mcp.client import MCPClient
+        from mcp.transports.stdio import StdioTransport
+        import sqlite3
+
+        db_path = tempfile.mktemp(suffix=".db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE test_t (id INT, name TEXT)")
+        conn.execute("INSERT INTO test_t VALUES (1, 'alice')")
+        conn.commit()
+        conn.close()
+
+        cmd = [sys.executable, "-m", "mcp.servers.sqlite_server", "--db", db_path]
+        transport = StdioTransport(command=cmd)
+        await transport.start()
+        client = MCPClient("sqlite_test", transport)
+        await client.connect()
+
+        result = await client.call_tool("list_tables", {})
+        tables = [t["name"] for t in result.get("content", [])]
+        assert "test_t" in tables
+
+        await client.close()
+        os.unlink(db_path)
+
+    @pytest.mark.asyncio
+    async def test_describe_table(self):
+        from mcp.client import MCPClient
+        from mcp.transports.stdio import StdioTransport
+        import sqlite3
+
+        db_path = tempfile.mktemp(suffix=".db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE t (id INT, name TEXT, amount REAL)")
+        conn.commit()
+        conn.close()
+
+        cmd = [sys.executable, "-m", "mcp.servers.sqlite_server", "--db", db_path]
+        transport = StdioTransport(command=cmd)
+        await transport.start()
+        client = MCPClient("sqlite_test", transport)
+        await client.connect()
+
+        result = await client.call_tool("describe_table", {"table": "t"})
+        content = result.get("content", [])
+        assert len(content) > 0
+        text = str(content).lower()
+        assert "id" in text and "name" in text and "amount" in text
+
+        await client.close()
+        os.unlink(db_path)
+
+    @pytest.mark.asyncio
+    async def test_sql_query_select(self):
+        from mcp.client import MCPClient
+        from mcp.transports.stdio import StdioTransport
+        import sqlite3
+
+        db_path = tempfile.mktemp(suffix=".db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE t (id INT, name TEXT)")
+        conn.execute("INSERT INTO t VALUES (1, 'alice'), (2, 'bob')")
+        conn.commit()
+        conn.close()
+
+        cmd = [sys.executable, "-m", "mcp.servers.sqlite_server", "--db", db_path]
+        transport = StdioTransport(command=cmd)
+        await transport.start()
+        client = MCPClient("sqlite_test", transport)
+        await client.connect()
+
+        result = await client.call_tool("sql_query", {"sql": "SELECT * FROM t ORDER BY id"})
+        content = result.get("content", [])
+        assert len(content) == 2
+        assert content[0]["id"] == 1 and content[0]["name"] == "alice"
+
+        await client.close()
+        os.unlink(db_path)
+
+    @pytest.mark.asyncio
+    async def test_sql_query_rejects_write(self):
+        from mcp.client import MCPClient
+        from mcp.transports.stdio import StdioTransport
+        import sqlite3
+
+        db_path = tempfile.mktemp(suffix=".db")
+        conn = sqlite3.connect(db_path)
+        conn.execute("CREATE TABLE t (id INT)")
+        conn.commit()
+        conn.close()
+
+        cmd = [sys.executable, "-m", "mcp.servers.sqlite_server", "--db", db_path]
+        transport = StdioTransport(command=cmd)
+        await transport.start()
+        client = MCPClient("sqlite_test", transport)
+        await client.connect()
+
+        with pytest.raises(RuntimeError, match="Only SELECT"):
+            await client.call_tool("sql_query", {"sql": "INSERT INTO t VALUES (1)"})
+
+        await client.close()
+        os.unlink(db_path)
