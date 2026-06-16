@@ -28,12 +28,21 @@ class Agent:
         self.skills = SkillManager(model_size=model_size)
         self.context = ContextManager(model_size=model_size)
         self.memory = MemoryManager()
+        self._mcp_initialized = False
 
     def run(self, query: str) -> AgentResult:
         """执行 Agent 主循环"""
         state = AgentState(query=query)
 
-        # 0. 召回相关记忆
+        # 0. 初始化 MCP 连接（首次运行）
+        if not self._mcp_initialized:
+            from config import MCP_SERVERS
+            if MCP_SERVERS:
+                import asyncio
+                asyncio.run(self.tools.discover_mcp(MCP_SERVERS))
+            self._mcp_initialized = True
+
+        # 1. 召回相关记忆
         recalled = self.memory.recall(query, top_k=3)
         state.memories_used = len(recalled)
         memory_context = ""

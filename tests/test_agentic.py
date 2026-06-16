@@ -171,6 +171,16 @@ class TestPrompts:
         t = get_tool_descriptions("en")
         assert "semantic_search" in t
 
+    def test_tool_descriptions_has_text_to_sql(self):
+        from agents.agentic.prompts import get_tool_descriptions
+        t = get_tool_descriptions("zh")
+        assert "text_to_sql" in t
+
+    def test_tool_descriptions_has_mcp_section(self):
+        from agents.agentic.prompts import get_tool_descriptions
+        t = get_tool_descriptions("zh")
+        assert "MCP" in t
+
 
 class TestContext:
     def test_count_tokens(self):

@@ -180,11 +180,18 @@ def get_tool_descriptions(language: str = "zh") -> str:
 | graph_search | 实体关系、多跳关联 | 数值查询、文本片段 |
 | hybrid_search | 高召回场景，多方法融合 | 简单单步查询 |
 | read_chunk | 已知 chunk_id 需要完整文本 | 没有 ID 的检索 |
+| text_to_sql | 检索到表格 chunk 后，需要查表/聚合/筛选/排序 | 无表格可用、纯文本问答 |
 | dispatch_subagent | 可拆分为 2+ 独立子任务 | 简单单步、强依赖任务 |
 | activate_skill | 查询匹配某技能领域时激活 | 简单查询无需专业指引 |
 | remember | 发现关键证据、矛盾点 | 常规检索结果 |
 | plan_steps | 3+ 步的复杂任务 | 简单 1-2 步查询 |
 | finish | 完成回答 | — |
+
+## MCP 工具
+
+如果系统连接了外部 MCP Server，工具列表中会出现 `mcp__<server>__<tool>` 格式的工具。
+这些工具由外部系统提供，能力取决于连接的服务器。常见的有：sql_query、list_tables 等。
+你无需特殊处理，正常选择使用即可。
 """
     else:
         return """
@@ -199,9 +206,16 @@ You have the following tools. Choose the most suitable one for each scenario:
 | graph_search | Entity relationships, multi-hop links | Numeric queries, text snippets |
 | hybrid_search | High recall, multi-method fusion | Simple single-step |
 | read_chunk | Known chunk_id, need full text | Searches without IDs |
+| text_to_sql | Table chunk retrieved, need query/aggregate/filter/sort | No table available, text-only QA |
 | dispatch_subagent | 2+ independent subtasks | Simple or tightly-dependent tasks |
 | activate_skill | Query matches a skill domain | Simple queries, no domain guidance needed |
 | remember | Key evidence, contradictions found | Routine search results |
 | plan_steps | 3+ step complex tasks | Simple 1-2 step queries |
 | finish | Complete answer | — |
+
+## MCP Tools
+
+If the system is connected to external MCP Servers, the tool list will include tools in `mcp__<server>__<tool>` format.
+These tools are provided by external systems. Common examples: sql_query, list_tables, etc.
+Use them normally like any other tool.
 """
