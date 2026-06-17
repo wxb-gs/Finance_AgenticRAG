@@ -368,3 +368,81 @@ class TestMCPToolIntegration:
         import asyncio
         asyncio.run(r.discover_mcp(servers=[]))
         assert len(r._mcp_clients) == 0
+
+
+class TestPlanIntegration:
+    def test_plan_creation_and_status(self):
+        from agents.agentic.types import Plan, PlanStep
+
+        plan = Plan(
+            query="test query",
+            steps=[
+                PlanStep(id="s1", description="step 1"),
+                PlanStep(id="s2", description="step 2", depends_on=["s1"]),
+                PlanStep(id="s3", description="step 3"),
+            ],
+        )
+
+        ready = plan.ready_steps()
+        assert len(ready) == 2
+        assert {s.id for s in ready} == {"s1", "s3"}
+
+        plan.mark_step("s1", "completed", "done step 1")
+        ready = plan.ready_steps()
+        assert len(ready) == 2
+        assert {s.id for s in ready} == {"s2", "s3"}
+
+        plan.mark_step("s2", "completed")
+        plan.mark_step("s3", "completed")
+        assert plan.all_done()
+
+    def test_plan_format_status(self):
+        from agents.agentic.types import Plan, PlanStep
+
+        plan = Plan(
+            query="test",
+            steps=[
+                PlanStep(id="s1", description="retrieve data",
+                         status="completed", result_summary="found 3 items"),
+                PlanStep(id="s2", description="calculate ROE",
+                         depends_on=["s1"]),
+            ],
+        )
+        text = plan.format_status()
+        assert "current plan" in text.lower() or "当前计划" in text
+        assert "s1" in text
+        assert "s2" in text
+        assert "completed" in text
+
+    def test_agent_state_has_plan(self):
+        from agents.agentic.types import AgentState, Plan, PlanStep
+
+        state = AgentState(query="test")
+        state.plan = Plan(
+            query="test",
+            steps=[PlanStep(id="s1", description="step 1")],
+        )
+        assert state.plan is not None
+        assert len(state.plan.steps) == 1
+
+    def test_plan_version_increment(self):
+        from agents.agentic.types import Plan, PlanStep
+
+        plan = Plan(query="test", steps=[PlanStep(id="s1", description="s1")])
+        v1 = plan.version
+        plan.version += 1
+        assert plan.version == v1 + 1
+
+    def test_plan_failed_step(self):
+        from agents.agentic.types import Plan, PlanStep
+
+        plan = Plan(query="test", steps=[
+            PlanStep(id="s1", description="step 1"),
+            PlanStep(id="s2", description="step 2"),
+        ])
+        plan.mark_step("s1", "failed")
+        plan.mark_step("s2", "failed")
+        assert plan.steps[0].status == "failed"
+        assert plan.steps[1].status == "failed"
+        # failed steps count as done for all_done
+        assert plan.all_done()

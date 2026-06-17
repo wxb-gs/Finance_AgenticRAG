@@ -61,6 +61,11 @@ MCP_SERVERS = [
         "command": ["python", "-m", "mcp.servers.sqlite_server"],
         "args": ["--db", os.path.join(DATA_DIR, "sqlite", "default.db")],
     },
+    {
+        "name": "python_default",
+        "transport": "stdio",
+        "command": ["python", "-m", "mcp.servers.python_server"],
+    },
 ]
 
 # 环境变量覆盖 MCP 配置
