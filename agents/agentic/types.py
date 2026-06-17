@@ -54,6 +54,7 @@ class AgentState:
     memories_used: int = 0
     compression_events: list[CompressionEvent] = field(default_factory=list)
     finished: bool = False
+    plan: Plan | None = None
     token_usage: int = 0
 
     def add_tool_call(self, call: ToolCall, result: ToolResult):
@@ -134,3 +135,75 @@ class SubAgentConfig:
     max_iterations: int
     system_prompt_override: str
     model_hint: Literal["small", "large"]
+
+
+@dataclass
+class PlanStep:
+    """计划中的单个步骤"""
+    id: str
+    description: str
+    depends_on: list[str] = field(default_factory=list)
+    agent_type: Literal["retrieval", "analysis", "general"] = "retrieval"
+    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    result_summary: str = ""
+
+
+@dataclass
+class Plan:
+    """多跳查询的结构化执行计划"""
+    query: str
+    steps: list[PlanStep] = field(default_factory=list)
+    version: int = 1
+    created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
+
+    def ready_steps(self) -> list[PlanStep]:
+        """返回所有依赖已满足且状态为 pending 的步骤"""
+        completed = {s.id for s in self.steps if s.status == "completed"}
+        return [
+            s for s in self.steps
+            if s.status == "pending"
+            and set(s.depends_on).issubset(completed)
+        ]
+
+    def mark_step(self, step_id: str, status: str,
+                  result_summary: str = ""):
+        """更新步骤状态"""
+        for s in self.steps:
+            if s.id == step_id:
+                s.status = status
+                if result_summary:
+                    s.result_summary = result_summary
+                self.updated_at = time.time()
+                return
+
+    def all_done(self) -> bool:
+        return all(
+            s.status in ("completed", "failed") for s in self.steps
+        )
+
+    def format_status(self) -> str:
+        """生成 Plan 状态的文本摘要，注入 System Prompt"""
+        if not self.steps:
+            return ""
+        lines = [f"[当前计划] (版本 {self.version})"]
+        for s in self.steps:
+            status_mark = {
+                "pending": "   ", "in_progress": "⏳",
+                "completed": "✓", "failed": "✗",
+            }.get(s.status, "?")
+            deps = f" ← 依赖: {s.depends_on}" if s.depends_on else ""
+            summary = f" → {s.result_summary[:80]}" if s.result_summary else ""
+            lines.append(
+                f"  {s.id} [{status_mark} {s.status}] {s.description}{deps}{summary}"
+            )
+        ready = self.ready_steps()
+        if ready:
+            lines.append(f"可并行派发: {[s.id for s in ready]}")
+        blocked = [
+            s.id for s in self.steps
+            if s.status == "pending" and s.id not in {r.id for r in ready}
+        ]
+        if blocked:
+            lines.append(f"等待依赖: {blocked}")
+        return "\n".join(lines)
