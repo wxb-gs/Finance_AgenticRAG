@@ -14,7 +14,7 @@ For each step, decide:
 - Do I have enough information to answer? → call `finish`
 - Do I need to search? → call retrieval tools
 - Did I find something worth remembering? → call `remember`
-- Is this a complex multi-step task? → call `plan_steps`
+- Is this a complex multi-step task? → call `plan_query`
 
 ## Tool Selection Rules
 
@@ -23,6 +23,9 @@ For each step, decide:
 - Use `graph_search` for entity relationship queries
 - Use `read_chunk` to fetch full text by chunk_id
 - Use `hybrid_search` when high recall matters across retrieval methods
+- Use `execute_python` for precise numerical calculations (via Python sandbox)
+- For complex multi-hop queries → first use `plan_query` to generate an execution plan
+- Use `text_to_sql` to query/aggregate/filter/sort after retrieving table chunks
 
 ## Behavior Rules
 
@@ -55,12 +58,14 @@ You are running on a large model (32B+). You may:
 - Split independent sub-tasks via `dispatch_subagent` for parallel execution.
 - Reason at length when the problem requires it.
 
-## Sub-Agent Decomposition
+## Sub-Agent Types
 
-You have access to `dispatch_subagent` for parallel task decomposition:
-- When the query can be split into 2+ independent sub-questions, dispatch them in parallel.
-- Each sub-agent runs with restricted tools and returns structured findings.
-- Sub-agents are best for: different entities (companies), different time periods, different metrics.
+You can use `dispatch_subagent` to parallelize independent subtasks. Three types are available:
+- `retrieval` — Pure information retrieval, fast structured results (small model)
+- `analysis` — Deep financial analysis: search + execute_python precise calculation + cross-source comparison (large model)
+- `general` — General-purpose sub-agent: freely combine search and computation tools for complex subtasks (mid model)
+
+When dispatching, use optional `step_id` to associate with a plan step for automatic status tracking.
 """
 
 # ══════════════════════════════════════════════════════════════════
@@ -77,7 +82,7 @@ _ZH_BASE = """你是金融信息检索 Agent。你的任务是通过搜索知识
 - 信息是否足够回答问题？→ 调用 `finish`
 - 是否需要搜索？→ 调用检索工具
 - 是否发现了值得记住的信息？→ 调用 `remember`
-- 是否是复杂的多步任务？→ 调用 `plan_steps`
+- 是否是复杂的多步任务？→ 调用 `plan_query`
 
 ## 工具选择规则
 
@@ -86,6 +91,9 @@ _ZH_BASE = """你是金融信息检索 Agent。你的任务是通过搜索知识
 - 实体关系查询（股东、子公司、关联方）→ `graph_search`
 - 需要读取完整文本块 → `read_chunk`
 - 需要跨多个检索方法高召回 → `hybrid_search`
+- 需要精确数值计算 → `execute_python`（通过 Python 沙箱执行）
+- 复杂多跳查询 → 先用 `plan_query` 生成执行计划
+- 检索到表格后需查表/聚合/筛选 → `text_to_sql`
 
 ## 行为规则
 
@@ -118,12 +126,14 @@ _ZH_LARGE_EXTRA = """
 - 使用 `dispatch_subagent` 并行拆分独立子任务。
 - 复杂问题可以详细推理。
 
-## 子代理分解
+## 子代理类型
 
-你可以使用 `dispatch_subagent` 进行并行任务分解：
-- 当查询可以拆分为 2+ 个独立子问题时，并行派发。
-- 每个子代理使用受限工具集并返回结构化结果。
-- 适用场景：不同公司、不同时间段、不同指标的并行查询。
+你可以使用 `dispatch_subagent` 并行拆分独立子任务，支持三种类型：
+- `retrieval` — 纯信息检索，快速返回结构化结果（小模型）
+- `analysis` — 深度财务分析：搜索 + execute_python 精确计算 + 多源对比（大模型）
+- `general` — 通用子代理：自由组合搜索和计算工具处理复杂子任务（中模型）
+
+派发时可选 `step_id` 关联计划步骤，系统会自动追踪步骤状态。
 """
 
 
@@ -184,13 +194,15 @@ def get_tool_descriptions(language: str = "zh") -> str:
 | dispatch_subagent | 可拆分为 2+ 独立子任务 | 简单单步、强依赖任务 |
 | activate_skill | 查询匹配某技能领域时激活 | 简单查询无需专业指引 |
 | remember | 发现关键证据、矛盾点 | 常规检索结果 |
-| plan_steps | 3+ 步的复杂任务 | 简单 1-2 步查询 |
+| plan_query | 3+ 跳复杂查询，需预先分解 | 简单 1-2 步查询 |
+| plan_update | 执行中标记步骤完成/失败，或追加步骤 | 步骤自动追踪时无需手动调用 |
+| execute_python | 精确数值计算、统计分析 | 纯文本推理、不需要计算 |
 | finish | 完成回答 | — |
 
 ## MCP 工具
 
 如果系统连接了外部 MCP Server，工具列表中会出现 `mcp__<server>__<tool>` 格式的工具。
-这些工具由外部系统提供，能力取决于连接的服务器。常见的有：sql_query、list_tables 等。
+这些工具由外部系统提供，能力取决于连接的服务器。常见的有：execute_python、sql_query、list_tables 等。
 你无需特殊处理，正常选择使用即可。
 """
     else:
@@ -210,12 +222,14 @@ You have the following tools. Choose the most suitable one for each scenario:
 | dispatch_subagent | 2+ independent subtasks | Simple or tightly-dependent tasks |
 | activate_skill | Query matches a skill domain | Simple queries, no domain guidance needed |
 | remember | Key evidence, contradictions found | Routine search results |
-| plan_steps | 3+ step complex tasks | Simple 1-2 step queries |
+| plan_query | 3+ step complex queries, need pre-decomposition | Simple 1-2 step queries |
+| plan_update | Mark steps complete/failed during execution, or append steps | Auto status tracking handles it |
+| execute_python | Precise numerical calculation, statistical analysis | Text-only reasoning, no computation needed |
 | finish | Complete answer | — |
 
 ## MCP Tools
 
 If the system is connected to external MCP Servers, the tool list will include tools in `mcp__<server>__<tool>` format.
-These tools are provided by external systems. Common examples: sql_query, list_tables, etc.
+These tools are provided by external systems. Common examples: execute_python, sql_query, list_tables, etc.
 Use them normally like any other tool.
 """
