@@ -259,20 +259,35 @@ class TestSubAgent:
     def test_configs_exist(self):
         from agents.agentic.sub_agent import SUBAGENT_TYPES
         assert "retrieval" in SUBAGENT_TYPES
-        assert "comparison" in SUBAGENT_TYPES
-        assert "computation" in SUBAGENT_TYPES
+        assert "analysis" in SUBAGENT_TYPES
+        assert "general" in SUBAGENT_TYPES
+        assert "computation" not in SUBAGENT_TYPES
+        assert "comparison" not in SUBAGENT_TYPES
 
     def test_retrieval_config(self):
         from agents.agentic.sub_agent import SUBAGENT_TYPES
         r = SUBAGENT_TYPES["retrieval"]
         assert r.max_iterations == 5
         assert "semantic_search" in r.tools
+        assert r.model_hint == "small"
 
-    def test_computation_finish_only(self):
+    def test_analysis_has_execute_python(self):
         from agents.agentic.sub_agent import SUBAGENT_TYPES
-        c = SUBAGENT_TYPES["computation"]
-        assert c.tools == ["finish"]
-        assert c.max_iterations == 3
+        a = SUBAGENT_TYPES["analysis"]
+        assert a.max_iterations == 8
+        assert a.model_hint == "large"
+        assert "mcp__python_default__execute_python" in a.tools
+        assert "semantic_search" in a.tools
+        assert "finish" in a.tools
+
+    def test_general_has_all_tools(self):
+        from agents.agentic.sub_agent import SUBAGENT_TYPES
+        g = SUBAGENT_TYPES["general"]
+        assert g.max_iterations == 10
+        assert g.model_hint == "mid"
+        assert "mcp__python_default__execute_python" in g.tools
+        assert "semantic_search" in g.tools
+        assert "graph_search" in g.tools
 
 
 class TestAgent:

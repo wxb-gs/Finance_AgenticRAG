@@ -11,25 +11,46 @@ from agents.agentic.types import SubAgentConfig, ToolCall, ToolResult
 
 SUBAGENT_TYPES: dict[str, SubAgentConfig] = {
     "retrieval": SubAgentConfig(
-        description="聚焦的信息检索：搜索、读取、筛选证据",
-        tools=["semantic_search", "keyword_search", "graph_search", "read_chunk", "finish"],
+        description="聚焦的信息检索：搜索、读取、返回结构化结果",
+        tools=["semantic_search", "keyword_search", "graph_search",
+               "read_chunk", "finish"],
         max_iterations=5,
-        system_prompt_override="你是信息检索专家。快速定位相关信息，返回结构化结果。不做深度分析推理。",
+        system_prompt_override=(
+            "你是信息检索专家。快速定位相关信息，返回结构化结果。"
+            "不做深度分析推理。"
+        ),
         model_hint="small",
     ),
-    "comparison": SubAgentConfig(
-        description="多源数据对比分析，找出差异和一致点",
-        tools=["semantic_search", "keyword_search", "read_chunk", "finish"],
+    "analysis": SubAgentConfig(
+        description=(
+            "深度财务分析：搜索证据、用 Python 精确计算、"
+            "多源对比、标注矛盾"
+        ),
+        tools=["semantic_search", "keyword_search", "graph_search",
+               "read_chunk",
+               "mcp__python_default__execute_python", "finish"],
         max_iterations=8,
-        system_prompt_override="你是财务分析专家。仔细对比多源数据，标注矛盾点和一致点。输出表格对比。",
+        system_prompt_override=(
+            "你是财务分析专家。搜索相关数据，用 execute_python "
+            "执行精确计算，对比多源信息并标注矛盾点。"
+            "输出结构化表格。"
+        ),
         model_hint="large",
     ),
-    "computation": SubAgentConfig(
-        description="精确数值计算、比率分析、趋势计算",
-        tools=["finish"],
-        max_iterations=3,
-        system_prompt_override="你是财务计算专家。精确计算并展示推导过程。只计算，不检索。",
-        model_hint="small",
+    "general": SubAgentConfig(
+        description=(
+            "通用子代理：搜+算一体，"
+            "处理需要多工具组合的复杂子任务"
+        ),
+        tools=["semantic_search", "keyword_search", "graph_search",
+               "read_chunk",
+               "mcp__python_default__execute_python", "finish"],
+        max_iterations=10,
+        system_prompt_override=(
+            "你是财务分析通用代理。根据任务需要自由组合搜索和计算工具，"
+            "独立完成子任务并返回完整结果。"
+        ),
+        model_hint="mid",
     ),
 }
 
