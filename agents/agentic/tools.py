@@ -142,6 +142,10 @@ _META_TOOL_DEFS = [
                     "enum": ["retrieval", "comparison", "computation"],
                     "description": "Type of sub-agent",
                 },
+                "step_id": {
+                    "type": "string",
+                    "description": "Optional. Associate this dispatch with a plan step for automatic status tracking.",
+                },
                 "run_in_background": {
                     "type": "boolean",
                     "description": "Run in background (true for parallel execution)",
@@ -187,10 +191,10 @@ _META_TOOL_DEFS = [
         },
     ),
     ToolMeta(
-        name="plan_steps",
+        name="plan_query",
         category="meta",
-        description="Create a structured task plan for complex multi-step queries.",
-        when_to_use="复杂查询有 3+ 步需要结构化追踪",
+        description="Generate a structured execution plan for complex multi-hop queries.",
+        when_to_use="复杂查询 3 跳以上，需要预先分解为有序步骤",
         when_not_to_use="简单 1-2 步查询",
         parameters={
             "type": "object",
@@ -200,15 +204,64 @@ _META_TOOL_DEFS = [
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id": {"type": "string"},
-                            "description": {"type": "string"},
-                            "depends_on": {"type": "array", "items": {"type": "string"}},
+                            "id": {"type": "string", "description": "步骤 ID，如 step_1"},
+                            "description": {"type": "string", "description": "步骤描述"},
+                            "depends_on": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "此步骤依赖的步骤 ID 列表",
+                            },
+                            "agent_type": {
+                                "type": "string",
+                                "enum": ["retrieval", "analysis", "general"],
+                                "description": "推荐子 Agent 类型",
+                            },
                         },
                         "required": ["id", "description"],
                     },
                 },
             },
             "required": ["steps"],
+        },
+    ),
+    ToolMeta(
+        name="plan_update",
+        category="meta",
+        description="Update plan step status or append new steps during execution.",
+        when_to_use="步骤完成/失败时标记，或发现新信息需追加步骤",
+        when_not_to_use="dispatch_subagent 会自动标记关联步骤的完成状态",
+        parameters={
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["complete", "fail", "append", "revise"],
+                    "description": "complete=标记完成, fail=标记失败, append=追加新步骤, revise=修订计划",
+                },
+                "step_id": {
+                    "type": "string",
+                    "description": "操作的步骤 ID（complete/fail 时必填）",
+                },
+                "result_summary": {
+                    "type": "string",
+                    "description": "步骤结果摘要（complete 时使用）",
+                },
+                "new_steps": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "description": {"type": "string"},
+                            "depends_on": {"type": "array", "items": {"type": "string"}},
+                            "agent_type": {"type": "string", "enum": ["retrieval", "analysis", "general"]},
+                        },
+                        "required": ["id", "description"],
+                    },
+                    "description": "追加的步骤列表（append 时必填）",
+                },
+            },
+            "required": ["action"],
         },
     ),
 ]
@@ -357,7 +410,8 @@ class ToolRegistry:
         elif name.startswith("mcp__"):
             return self._exec_mcp(call)
         # 元工具 — 返回 sentinel 标记，由 Agent 循环处理
-        elif name in ("dispatch_subagent", "activate_skill", "remember", "plan_steps"):
+        elif name in ("dispatch_subagent", "activate_skill", "remember",
+                      "plan_query", "plan_update"):
             return ToolResult(
                 call_id=call.id,
                 tool_name=name,
