@@ -5,7 +5,7 @@ import uuid
 import asyncio
 from pathlib import Path
 
-from agents.agentic.types import AgentState, AgentResult, ToolCall, ToolResult
+from agents.agentic.types import AgentState, AgentResult, ToolCall, ToolResult, Plan, PlanStep
 from agents.agentic.tools import ToolRegistry
 from agents.agentic.skills import SkillManager
 from agents.agentic.context import ContextManager
@@ -65,6 +65,16 @@ class Agent:
         # 3. 工具 schema
         tool_schemas = self.tools.get_all_schemas()
 
+        # 3.5 注入 Plan 状态到 System Prompt
+        def _build_messages_with_plan(base_messages, state):
+            """每轮重建消息，动态注入 Plan 状态"""
+            if state.plan and state.plan.steps:
+                plan_text = state.plan.format_status()
+                msgs = list(base_messages)
+                msgs.insert(1, {"role": "system", "content": plan_text})
+                return msgs
+            return base_messages
+
         # 4. ReAct 循环
         no_tool_streak = 0
         while state.iterations < self.max_iterations and not state.finished:
@@ -76,7 +86,9 @@ class Agent:
                 state.compression_events.append(event)
 
             # LLM 调用
-            response = self._chat(messages, tool_schemas)
+            # 每次 LLM 调用前注入最新 Plan 状态
+            current_messages = _build_messages_with_plan(messages, state)
+            response = self._chat(current_messages, tool_schemas)
 
             if response.get("tool_calls"):
                 no_tool_streak = 0
@@ -114,6 +126,9 @@ class Agent:
                         break
 
                     elif call.name == "dispatch_subagent" and self.enable_subagents:
+                        step_id = call.args.get("step_id")
+                        if step_id and state.plan:
+                            state.plan.mark_step(step_id, "in_progress")
                         sub_result = self._run_subagent_sync(
                             task=call.args.get("task", ""),
                             agent_type=call.args.get("agent_type", "retrieval"),
@@ -124,6 +139,11 @@ class Agent:
                             content=json.dumps(sub_result, ensure_ascii=False),
                         )
                         state.subagent_count += 1
+                        if step_id and state.plan:
+                            state.plan.mark_step(
+                                step_id, "completed",
+                                sub_result.get("findings", "")[:200],
+                            )
                         state.add_tool_call(call, result)
                         messages.append({
                             "role": "tool",
@@ -166,12 +186,64 @@ class Agent:
                             "content": "Memory saved.",
                         })
 
-                    elif call.name == "plan_steps":
-                        steps = call.args.get("steps", [])
+                    elif call.name == "plan_query":
+                        steps_data = call.args.get("steps", [])
+                        plan_steps = [
+                            PlanStep(
+                                id=s["id"],
+                                description=s["description"],
+                                depends_on=s.get("depends_on", []),
+                                agent_type=s.get("agent_type", "retrieval"),
+                            )
+                            for s in steps_data
+                        ]
+                        state.plan = Plan(
+                            query=query,
+                            steps=plan_steps,
+                        )
                         result = ToolResult(
                             call_id=call.id, tool_name=call.name,
                             success=True,
-                            content=f"Plan created with {len(steps)} steps.",
+                            content=f"Plan created with {len(plan_steps)} steps:\n{state.plan.format_status()}",
+                        )
+                        state.add_tool_call(call, result)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": call.id,
+                            "content": result.content,
+                        })
+
+                    elif call.name == "plan_update":
+                        action = call.args.get("action", "")
+                        step_id = call.args.get("step_id", "")
+                        result_content = f"Plan updated: action={action}"
+                        if state.plan:
+                            if action == "complete":
+                                state.plan.mark_step(
+                                    step_id, "completed",
+                                    call.args.get("result_summary", ""),
+                                )
+                            elif action == "fail":
+                                state.plan.mark_step(step_id, "failed")
+                            elif action == "append":
+                                new_steps = call.args.get("new_steps", [])
+                                for s in new_steps:
+                                    state.plan.steps.append(PlanStep(
+                                        id=s["id"],
+                                        description=s["description"],
+                                        depends_on=s.get("depends_on", []),
+                                        agent_type=s.get("agent_type", "retrieval"),
+                                    ))
+                                state.plan.version += 1
+                                state.plan.updated_at = time.time()
+                                result_content += f", {len(new_steps)} steps appended"
+                            elif action == "revise":
+                                state.plan.version += 1
+                                state.plan.updated_at = time.time()
+                        result = ToolResult(
+                            call_id=call.id, tool_name=call.name,
+                            success=True,
+                            content=result_content,
                         )
                         state.add_tool_call(call, result)
                         messages.append({
