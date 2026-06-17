@@ -139,7 +139,7 @@ _META_TOOL_DEFS = [
                 "task": {"type": "string", "description": "Sub-task description"},
                 "agent_type": {
                     "type": "string",
-                    "enum": ["retrieval", "comparison", "computation"],
+                    "enum": ["retrieval", "analysis", "general"],
                     "description": "Type of sub-agent",
                 },
                 "step_id": {
