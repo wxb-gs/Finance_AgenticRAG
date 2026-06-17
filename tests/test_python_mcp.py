@@ -114,6 +114,43 @@ def test_python_mcp_restricted_import():
     asyncio.run(_run())
 
 
+def test_python_mcp_execute_with_bool_and_none_context():
+    """execute_python handles True/False/None context values."""
+    from mcp.client import MCPClient
+    from mcp.transports.stdio import StdioTransport
+
+    async def _run():
+        cmd = [sys.executable, "-m", "mcp.servers.python_server"]
+        transport = StdioTransport(command=cmd)
+        await transport.start()
+        client = MCPClient("python_default", transport)
+        await client.connect()
+
+        try:
+            result = await client.call_tool("execute_python", {
+                "code": (
+                    "results = []\n"
+                    "if flag:\n"
+                    "    results.append('flag_is_true')\n"
+                    "if not skip:\n"
+                    "    results.append('skip_is_false')\n"
+                    "if extra is None:\n"
+                    "    results.append('extra_is_none')\n"
+                    "print(','.join(results))\n"
+                ),
+                "context": {"flag": True, "skip": False, "extra": None},
+            })
+            content = result["content"]
+            assert content["success"] is True, f"stderr: {content['stderr']}"
+            assert "flag_is_true" in content["stdout"]
+            assert "skip_is_false" in content["stdout"]
+            assert "extra_is_none" in content["stdout"]
+        finally:
+            await client.close()
+
+    asyncio.run(_run())
+
+
 def test_python_mcp_syntax_error():
     """execute_python returns stderr for syntax errors."""
     from mcp.client import MCPClient

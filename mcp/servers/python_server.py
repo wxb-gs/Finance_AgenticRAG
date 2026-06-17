@@ -110,7 +110,7 @@ def _execute_python(code, context, timeout):
     timeout = min(int(timeout or 30), 60)
 
     context_lines = "\n".join(
-        f"{k} = {json.dumps(v, ensure_ascii=False)}"
+        f"{k} = {repr(v)}"
         for k, v in (context or {}).items()
     )
 
@@ -127,6 +127,12 @@ def _execute_python(code, context, timeout):
             )
         return _orig_import(name, *args, **kwargs)
     __builtins.__import__ = _restricted_import
+    _orig_open = __builtins.open
+    def _restricted_open(file, mode='r', *args, **kwargs):
+        if mode not in ('r', 'rb', 'rt'):
+            raise PermissionError("File writes are not allowed in sandbox.")
+        return _orig_open(file, mode, *args, **kwargs)
+    __builtins.open = _restricted_open
     """).strip()
 
     full_code = import_guard + "\n" + context_lines + "\n" + code
@@ -137,6 +143,10 @@ def _execute_python(code, context, timeout):
             capture_output=True,
             text=True,
             timeout=timeout,
+            env={
+                "PATH": os.environ.get("PATH", ""),
+                "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+            },
         )
         return {
             "content": {
