@@ -13,7 +13,7 @@
 | 有效上下文 | 28672 | |
 | Layer 4 缓冲 | ~4000 | |
 | Layer 4 触发线 | ~24672 (75%) | `compress_threshold` 控制 |
-| Layer 2 触发 | 每次 LLM 请求前 | 热路径，无阈值 |
+| Layer 2 触发 | 见下方两种条件 | 缓存感知，尽量不影响 prompt cache |
 
 ---
 
@@ -39,9 +39,12 @@
 
 ## Layer 2: MicroCompact
 
-**定位**：清理旧 tool_result 内容，替换为占位符，不破坏消息结构。
+**定位**：清理旧 tool_result 内容，替换为占位符，不破坏消息结构。**缓存感知**——只在缓存已冷或可压缩结果累积到阈值时才触发，避免频繁操作破坏 prompt cache 前缀。
 
-**触发**：每次 LLM 调用前（热路径）。
+**触发条件**（满足任一即触发）：
+
+1. **时间触发**：距离上次对话 > `micro_idle_minutes`（默认 60）分钟。此时 prompt cache TTL 已过期，缓存已冷，可以安全替换本地消息。
+2. **计数触发**：已注册的可压缩工具结果数量 > `micro_trigger_threshold`（默认 10）。缓存可能仍热，但可压缩结果太多，需要清理。
 
 **可清理工具**（输出可重放）：
 - `semantic_search`、`keyword_search`、`graph_search`、`hybrid_search`
@@ -51,9 +54,9 @@
 - `finish`、`dispatch_subagent`、`activate_skill`
 - `remember`、`plan_query`、`plan_update`、`mcp__*`
 
-**逻辑**：保留最近 `micro_keep_recent` 条（默认 6）tool_result 完整内容，更早的 → 替换为 `[Old tool result content cleared]`。
+**逻辑**：保留最近 `micro_keep_recent` 条（默认 5）tool_result 完整内容，更早的 → 替换为 `[Old tool result content cleared]`。
 
-**可配参数**：`micro_keep_recent`（默认 6）。
+**可配参数**：`micro_keep_recent`（默认 5）、`micro_trigger_threshold`（默认 10）、`micro_idle_minutes`（默认 60）。
 
 ---
 
@@ -178,7 +181,9 @@ class CompactBoundary:
 | `compress_threshold` | 0.75 | 触发压缩的利用率 |
 | `output_reserve` | 4096 | 输出预留 |
 | `snip_enabled` | False | Layer 1 开关 |
-| `micro_keep_recent` | 6 | Layer 2 保留最近 K 条 |
+| `micro_keep_recent` | 5 | Layer 2 保留最近 K 条 |
+| `micro_trigger_threshold` | 10 | Layer 2 可压缩工具数触发阈值 |
+| `micro_idle_minutes` | 60 | Layer 2 空闲时间触发（分钟） |
 | `sm_min_tokens` | 10000 | Layer 3 首次触发 |
 | `sm_step_tokens` | 5000 | Layer 3 增量步长 |
 | `sm_keep_recent` | 8 | Layer 3 保留最近 K 条 |
