@@ -1,0 +1,141 @@
+<h2>子 Agent 设计反思：对照 Claude Code 重新审视</h2>
+<p class="subtitle">核心问题：当前按"业务领域"分类，Claude Code 按"读写边界"分类</p>
+
+<div class="section">
+  <h3>Claude Code vs 当前设计 vs 改进方案</h3>
+  <table style="width:100%; border-collapse: collapse;">
+    <tr style="background: var(--surface);">
+      <th style="padding: 8px 12px; text-align: left;">Claude Code</th>
+      <th style="padding: 8px 12px; text-align: left;">当前设计</th>
+      <th style="padding: 8px 12px; text-align: left;">改进方案</th>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>Explore</code> — 只读搜索工具，快速定位</td>
+      <td style="padding: 8px 12px;"><code>retrieval</code> — 搜索工具，5轮</td>
+      <td style="padding: 8px 12px; background: #f0fdf4;"><code>retrieval</code> — <strong>保持不变</strong>，职责清晰</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>general-purpose</code> — <strong>全部工具</strong>，复杂任务</td>
+      <td style="padding: 8px 12px; color: #dc2626;">— 缺失 —</td>
+      <td style="padding: 8px 12px; background: #f0fdf4;"><code>general</code> — <strong>新增</strong>：搜索 + execute_python + finish，mid模型，8轮</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>Plan</code> — 读+思考，不能写</td>
+      <td style="padding: 8px 12px;"><code>comparison</code> — 搜索+finish，大模型，8轮</td>
+      <td style="padding: 8px 12px; background: #f0fdf4;"><code>analysis</code> — 重命名，加 execute_python，大模型，8轮</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">(Bash 工具在主 Agent 中)</td>
+      <td style="padding: 8px 12px;"><code>computation</code> — 只有 execute_python</td>
+      <td style="padding: 8px 12px; background: #fef3c7;"><strong>移除独立类型</strong>，execute_python 提升到 retrieval 和 analysis</td>
+    </tr>
+  </table>
+</div>
+
+<div class="section">
+  <h3>改进后：3 种类型覆盖全场景</h3>
+  <div class="mockup">
+    <div class="mockup-header">子 Agent 类型（按能力层次，而非业务领域）</div>
+    <div class="mockup-body">
+      <table style="width:100%; border-collapse: collapse;">
+        <tr style="background: var(--surface);">
+          <th style="padding: 8px 12px;">类型</th>
+          <th style="padding: 8px 12px;">工具</th>
+          <th style="padding: 8px 12px;">迭代</th>
+          <th style="padding: 8px 12px;">模型</th>
+          <th style="padding: 8px 12px;">对标 Claude Code</th>
+          <th style="padding: 8px 12px;">适用场景</th>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px;"><code>retrieval</code></td>
+          <td style="padding: 8px 12px;">semantic, keyword, graph, read_chunk, finish</td>
+          <td style="padding: 8px 12px;">5</td>
+          <td style="padding: 8px 12px;">small</td>
+          <td style="padding: 8px 12px;">Explore</td>
+          <td style="padding: 8px 12px;">纯搜索：获取数据、定位信息</td>
+        </tr>
+        <tr style="background: #f0fdf4;">
+          <td style="padding: 8px 12px;"><code>analysis</code><br><span style="font-size:0.8em;color:var(--muted);">(原 comparison 升级)</span></td>
+          <td style="padding: 8px 12px;">semantic, keyword, read_chunk, <strong>execute_python</strong>, finish</td>
+          <td style="padding: 8px 12px;">8</td>
+          <td style="padding: 8px 12px;">large</td>
+          <td style="padding: 8px 12px;">Plan</td>
+          <td style="padding: 8px 12px;">深度分析：对比、计算、判断，需要搜+算一体</td>
+        </tr>
+        <tr style="background: #f0fdf4;">
+          <td style="padding: 8px 12px;"><code>general</code><br><span style="font-size:0.8em;color:var(--muted);">(新增)</span></td>
+          <td style="padding: 8px 12px;"><strong>全部检索 + execute_python</strong> + finish</td>
+          <td style="padding: 8px 12px;">10</td>
+          <td style="padding: 8px 12px;">mid</td>
+          <td style="padding: 8px 12px;">general-purpose</td>
+          <td style="padding: 8px 12px;">开放式子任务：不确定需要什么工具时用这个</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>为什么移除独立的 computation 类型？</h3>
+  <div class="mockup">
+    <div class="mockup-header">"只能算不能搜"是一个有问题的约束</div>
+    <div class="mockup-body">
+      <p>
+        Claude Code 不会创建一个"只允许 Bash 其他什么都不许做"的子 Agent。
+        Python 执行跟搜索一样，都是工具——子 Agent 应该根据任务需要自由组合工具，
+        而不是被强制限定在单一工具上。
+      </p>
+      <p style="margin-top: 12px;">
+        <strong>具体问题：</strong>computation 子 Agent 收到"计算 DuPont ROE"任务时，
+        如果数据里有矛盾（比如两份文档的净利润数值不同），它没有搜索能力去核实——
+        只能基于主 Agent 喂给它的数据硬算。而 <code>analysis</code> 子 Agent
+        发现自己算出来的 ROE 跟某份文档里声称的 ROE 不同，可以立刻回搜核实。
+      </p>
+      <p style="margin-top: 8px; color: var(--muted);">
+        类比 Claude Code：你派一个子 Agent "调查 Bug X 并修复"，它需要同时读取代码（search）和运行测试（bash）。
+        你不会把一个任务拆成"Agent A: 读代码"和"Agent B: 运行命令"再手动拼接结果。
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>覆盖度检查</h3>
+  <table style="width:100%; border-collapse: collapse;">
+    <tr style="background: var(--surface);">
+      <th style="padding: 8px 12px;">财报分析任务类型</th>
+      <th style="padding: 8px 12px;">推荐子 Agent</th>
+      <th style="padding: 8px 12px;">说明</th>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">"搜索宁德时代 2024 营收"</td>
+      <td style="padding: 8px 12px;">retrieval</td>
+      <td style="padding: 8px 12px;">纯搜索，无计算</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">"计算三家公司的 DuPont ROE 并排名"</td>
+      <td style="padding: 8px 12px;">analysis</td>
+      <td style="padding: 8px 12px;">搜数据 + Python 计算 + 对比，一个 Agent 内完成</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">"对比宁德时代和比亚迪的研发投入趋势"</td>
+      <td style="padding: 8px 12px;">analysis</td>
+      <td style="padding: 8px 12px;">横向对比 + 趋势判断，需要大模型</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">"找出锂电行业 ROE 最高的公司"</td>
+      <td style="padding: 8px 12px;">general</td>
+      <td style="padding: 8px 12px;">先搜行业公司列表 → 逐个搜财务 → 算 ROE → 排序，多步长链路</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">"评估恒大退市风险"</td>
+      <td style="padding: 8px 12px;">Plan → retrieval×2 + analysis</td>
+      <td style="padding: 8px 12px;">主 Agent 拆分 Plan，并行搜资产负债+违约记录，最后 analysis 综合评分</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">"验证报告中的 ROE 计算是否正确"</td>
+      <td style="padding: 8px 12px;">analysis</td>
+      <td style="padding: 8px 12px;">搜原文 ROE 数据 → Python 重算 → 对比差异</td>
+    </tr>
+  </table>
+</div>

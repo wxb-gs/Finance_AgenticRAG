@@ -1,9 +1,16 @@
 {
-  "permissions": {
-    "allow": [
-      "Bash(python -c \"from agents.agentic.types import AgentState, ToolMeta, ToolCall, ToolResult, AgentResult, CompressionEvent, SubAgentConfig; print\\('types OK'\\)\")",
-      "Bash(python -c ' *)",
-      "Bash(python -m pytest tests/test_agentic.py -v --tb=short)"
-    ]
-  }
+    "permissions": {
+        "defaultMode": "auto",
+        "allow": [
+            "Bash(python -c \"from agents.agentic.types import AgentState, ToolMeta, ToolCall, ToolResult, AgentResult, CompressionEvent, SubAgentConfig; print\\('types OK'\\)\")",
+            "Bash(python -c ' *)",
+            "Bash(python -m pytest tests/test_agentic.py -v --tb=short)",
+            "Bash(git add *)",
+            "Bash(git commit *)",
+            "Bash(git remote *)",
+            "Bash(pip install *)",
+            "Bash(python -m pytest tests/test_mcp.py -v)",
+            "WebSearch"
+        ]
+    }
 }

@@ -18,3 +18,4 @@ docker
 .vscode
 LLaMa-Factory
 training
+.claude/skills

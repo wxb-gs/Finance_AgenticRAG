@@ -1,0 +1,218 @@
+<h2>子系统 3：SubAgent 调度器 + execute_python 集成</h2>
+<p class="subtitle">改动集中在两个文件：sub_agent.py (computation 升级) + agent.py (Plan 感知调度)</p>
+
+<div class="section">
+  <h3>核心变更：computation 子 Agent 从"LLM 心算"升级为"Python 精确计算"</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">现在</div>
+      <div class="mockup-body">
+        <pre style="margin:0; font-size: 0.8em;">
+"computation": SubAgentConfig(
+    tools=["finish"],       ← 只能心算
+    max_iterations=3,
+    system_prompt="你是财务计算专家。\
+精确计算并展示推导过程。只计算，不检索。",
+    model_hint="small",
+)
+        </pre>
+        <p style="color: var(--muted); font-size:0.85em; margin-top:8px;">
+          模型看到检索数据 → 在脑子里算 → finish 输出<br>
+          问题: 多步计算易出错，无法验证，复现性差
+        </p>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">目标</div>
+      <div class="mockup-body">
+        <pre style="margin:0; font-size: 0.8em;">
+"computation": SubAgentConfig(
+    tools=[
+        "mcp__python_default__execute_python",  ← MCP 沙箱
+        "finish",
+    ],
+    max_iterations=5,       ← 写→执行→修→执行→finish
+    system_prompt="你是财务计算专家。\
+用 execute_python 编写精确的 Python 脚本。\
+执行后检查结果，如有错误修正后重试。\
+确认无误后，用 finish 输出最终结果和推导过程。",
+    model_hint="small",
+)
+        </pre>
+        <p style="color: var(--muted); font-size:0.85em; margin-top:8px;">
+          模型写 Python → MCP 执行 → 读输出 → 有错就改 → finish<br>
+          好处: 精确可复现, 复杂公式不出错
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Computation SubAgent 内部执行流程</h3>
+  <div class="mockup">
+    <div class="mockup-header">示例：DuPont ROE 分解</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.82em; line-height: 1.7;">
+Task: "计算 DuPont ROE 分解: NPM=净利润/营收, TAT=营收/总资产, EM=总资产/净资产, ROE=NPM×TAT×EM
+       数据: 净利润=36亿, 营收=292亿, 总资产=320亿, 净资产=198亿"
+
+SubAgent ReAct 循环:
+  Round 1 — Think: 写 Python 计算 DuPont 三项 + ROE
+    Act: execute_python(code="""
+      ni, rev = 36.0, 292.0
+      assets, equity = 320.0, 198.0
+      npm = ni / rev
+      tat = rev / assets
+      em = assets / equity
+      roe = npm * tat * em
+      print(f"NPM={npm:.4f} ({npm*100:.2f}%)")
+      print(f"TAT={tat:.4f}")
+      print(f"EM={em:.4f}")
+      print(f"ROE={roe:.4f} ({roe*100:.2f}%)")
+    """)
+    Observe: stdout → NPM=0.1233 (12.33%), TAT=0.9125, EM=1.6162, ROE=0.1820 (18.20%)
+
+  Round 2 — Think: 结果正确，整理输出
+    Act: finish(answer="DuPont ROE 分解: NPM 12.33% × TAT 0.91 × EM 1.62 = ROE 18.20%")
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Agent 循环：Plan 感知调度</h3>
+  <div class="mockup">
+    <div class="mockup-header">dispatch_subagent 增加可选的 step_id 参数</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.82em; line-height: 1.7;">
+# agent.py — dispatch_subagent 处理逻辑扩展
+
+elif call.name == "dispatch_subagent" and self.enable_subagents:
+    step_id = call.args.get("step_id")  # NEW: 关联 Plan step
+
+    # 如果有 Plan 且有关联 step，标记为 in_progress
+    if step_id and state.plan:
+        state.plan.mark_step(step_id, "in_progress")
+
+    sub_result = self._run_subagent_sync(
+        task=call.args.get("task", ""),
+        agent_type=call.args.get("agent_type", "retrieval"),
+    )
+
+    result = ToolResult(...)
+    state.subagent_count += 1
+
+    # NEW: 自动更新 Plan step 状态
+    if step_id and state.plan:
+        state.plan.mark_step(step_id, "completed",
+            result_summary=sub_result.get("findings", "")[:200])
+
+    state.add_tool_call(call, result)
+    messages.append(...)
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>完整的执行时序：Plan → Dispatch → Python → Finish</h3>
+  <div class="mockup">
+    <div class="mockup-header">多跳查询："计算宁德时代 DuPont ROE 并对比行业均值"</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.8em; line-height: 1.6;">
+
+ 主 Agent 循环
+ ──────────────────────────────────────────────────────────────────────
+
+ [Round 1]  query 是 3 跳复杂查询 → plan_query
+            生成 Plan:
+              step_1 (retrieval) []         获取利润表
+              step_2 (retrieval) []         获取资产负债表
+              step_3 (retrieval) []         获取行业均值
+              step_4 (computation) [1,2]    DuPont 分解
+              step_5 (computation) [3,4]   行业对比
+              step_6 (comparison)  [4,5]   结论综合
+
+ [Round 2]  模型看 Plan: 1,2,3 无依赖 → 并行派发
+            dispatch_subagent × 3
+              ├─ SubAgent(retrieval, step_1) → NPM=0.1233, revenue=292...
+              ├─ SubAgent(retrieval, step_2) → assets=320, equity=198...
+              └─ SubAgent(retrieval, step_3) → industry_roe=0.127...
+            → step_1,2,3 = completed
+
+ [Round 3]  模型看 Plan: step_4 ready → 派发
+            dispatch_subagent(computation, step_4)
+              └─ SubAgent(computation)
+                   Round 1 → execute_python(DuPont 分解)
+                   Round 2 → finish("ROE=18.20%...")
+            → step_4 = completed
+
+ [Round 4]  模型看 Plan: step_5 ready → 派发
+            dispatch_subagent(computation, step_5)
+              └─ SubAgent(computation)
+                   Round 1 → execute_python(行业对比)
+                   Round 2 → finish("高于行业均值 5.5pp")
+            → step_5 = completed
+
+ [Round 5]  模型看 Plan: step_6 ready → 派发
+            dispatch_subagent(comparison, step_6)
+              └─ 综合结论
+            → step_6 = completed
+
+ [Round 6]  所有步骤完成 → finish(final_answer, plan_trace)
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>改动文件清单</h3>
+  <table style="width:100%; border-collapse: collapse;">
+    <tr style="background: var(--surface);">
+      <th style="padding: 8px 12px; text-align: left;">文件</th>
+      <th style="padding: 8px 12px; text-align: left;">改动</th>
+      <th style="padding: 8px 12px; text-align: left;">量级</th>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>mcp_servers/python_server.py</code></td>
+      <td style="padding: 8px 12px;">新建 Python MCP Server，实现 execute_python 工具</td>
+      <td style="padding: 8px 12px;">~120 行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>mcp_servers/__init__.py</code></td>
+      <td style="padding: 8px 12px;">新建包声明</td>
+      <td style="padding: 8px 12px;">~3 行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>config.py</code></td>
+      <td style="padding: 8px 12px;">新增 PYTHON_MCP_SERVER 配置，自动合并到 MCP_SERVERS</td>
+      <td style="padding: 8px 12px;">~10 行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>agents/agentic/types.py</code></td>
+      <td style="padding: 8px 12px;">新增 Plan, PlanStep dataclass</td>
+      <td style="padding: 8px 12px;">~40 行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>agents/agentic/tools.py</code></td>
+      <td style="padding: 8px 12px;">plan_steps → plan_query, 新增 plan_update, __result__ 约定</td>
+      <td style="padding: 8px 12px;">~30 行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>agents/agentic/agent.py</code></td>
+      <td style="padding: 8px 12px;">Plan 生成/追踪/注入, dispatch 关联 step_id, 自动更新 Plan</td>
+      <td style="padding: 8px 12px;">~50 行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>agents/agentic/sub_agent.py</code></td>
+      <td style="padding: 8px 12px;">computation 工具集升级, 增加 execute_python</td>
+      <td style="padding: 8px 12px;">~15 行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;"><code>agents/agentic/prompts.py</code></td>
+      <td style="padding: 8px 12px;">工具描述表新增 plan_query, plan_update, execute_python</td>
+      <td style="padding: 8px 12px;">~15 行</td>
+    </tr>
+  </table>
+</div>

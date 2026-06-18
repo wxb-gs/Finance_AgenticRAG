@@ -26,9 +26,25 @@ class Agent:
 
         self.tools = ToolRegistry(model_size=model_size)
         self.skills = SkillManager(model_size=model_size)
-        self.context = ContextManager(model_size=model_size)
         self.memory = MemoryManager()
         self._mcp_initialized = False
+
+        from config import AGENT_CONFIG
+
+        self.context = ContextManager(
+            max_tokens=AGENT_CONFIG.get("context_max_tokens", 32768),
+            compress_threshold=AGENT_CONFIG.get("context_compress_threshold", 0.75),
+            output_reserve=AGENT_CONFIG.get("context_output_reserve", 4096),
+            snip_enabled=AGENT_CONFIG.get("context_snip_enabled", False),
+            micro_keep_recent=AGENT_CONFIG.get("context_micro_keep_recent", 5),
+            micro_trigger_threshold=AGENT_CONFIG.get("context_micro_trigger_threshold", 10),
+            micro_idle_minutes=AGENT_CONFIG.get("context_micro_idle_minutes", 60),
+            sm_min_tokens=AGENT_CONFIG.get("context_sm_min_tokens", 10000),
+            sm_step_tokens=AGENT_CONFIG.get("context_sm_step_tokens", 5000),
+            sm_keep_recent=AGENT_CONFIG.get("context_sm_keep_recent", 8),
+            summary_max_tokens=AGENT_CONFIG.get("context_summary_max_tokens", 4000),
+            circuit_breaker=AGENT_CONFIG.get("context_circuit_breaker", 3),
+        )
 
     def run(self, query: str) -> AgentResult:
         """执行 Agent 主循环"""
@@ -81,9 +97,10 @@ class Agent:
             state.iterations += 1
 
             # 上下文压缩检查
+            self.context.touch()
             if self.context.should_compress(messages):
-                messages, event = self.context.compress(messages)
-                state.compression_events.append(event)
+                messages, events = self.context.compress(messages)
+                state.compression_events.extend(events)
 
             # LLM 调用
             # 每次 LLM 调用前注入最新 Plan 状态

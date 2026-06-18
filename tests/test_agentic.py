@@ -183,47 +183,171 @@ class TestPrompts:
 
 
 class TestContext:
-    def test_count_tokens(self):
-        from agents.agentic.context import count_tokens
+    def test_estimate_tokens(self):
+        from agents.agentic.context import estimate_tokens
         msgs = [{"role": "system", "content": "You are helpful."}]
-        n = count_tokens(msgs)
+        n = estimate_tokens(msgs)
         assert n > 0
 
-    def test_should_compress(self):
-        from agents.agentic.context import ContextManager
-        mgr = ContextManager(model_size="small", max_tokens=30)
-        msgs = [{"role": "system", "content": "A" * 500}]
-        assert mgr.should_compress(msgs)
+    def test_estimate_tokens_fallback(self):
+        """字符估算 fallback：中文混合文本"""
+        from agents.agentic.context import estimate_tokens
+        msgs = [{"role": "user", "content": "你好世界 hello world"}]
+        n = estimate_tokens(msgs)
+        assert n > 0
 
-    def test_small_aggressive(self):
-        from agents.agentic.context import ContextManager, count_tokens
-        mgr = ContextManager(model_size="small", max_tokens=2000)
-        msgs = [
-            {"role": "system", "content": "Base prompt"},
-            {"role": "user", "content": "查询营收"},
-            {"role": "assistant", "content": "searching..."},
-            {"role": "tool", "content": "[1] chunk_id=001 score=0.9\n    result: 123亿营收"},
-            {"role": "assistant", "content": "searching more..."},
-            {"role": "tool", "content": "[1] chunk_id=002 score=0.8\n    result: 456亿营收"},
-            {"role": "assistant", "content": "still searching..."},
-            {"role": "tool", "content": "[1] chunk_id=003 score=0.7\n    result: nothing new"},
-        ]
-        compressed, event = mgr.compress(msgs)
-        assert event.strategy == "aggressive"
-        assert len(compressed) <= len(msgs) + 1
-
-    def test_mid_strategy(self):
+    def test_init_defaults(self):
         from agents.agentic.context import ContextManager
-        mgr = ContextManager(model_size="mid", max_tokens=2000)
+        mgr = ContextManager()
+        assert mgr.max_tokens == 32768
+        assert mgr.snip_enabled is False
+        assert mgr.micro_keep_recent == 5
+        assert mgr.sm_min_tokens == 10000
+
+    def test_init_custom(self):
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager(
+            max_tokens=16000,
+            snip_enabled=True,
+            micro_keep_recent=3,
+            sm_min_tokens=5000,
+        )
+        assert mgr.max_tokens == 16000
+        assert mgr.snip_enabled is True
+        assert mgr.micro_keep_recent == 3
+
+    def test_compress_trigger(self):
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager(max_tokens=200, output_reserve=40, compress_threshold=0.5)
+        # effective = 160, trigger = 80
+        small = [{"role": "system", "content": "hi"}]
+        assert not mgr.should_compress(small)
+        # 用变长文本保证 token 数超过 trigger（BPE 会合并重复字符）
+        large = [{"role": "system", "content": " ".join(f"token{i}" for i in range(200))}]
+        assert mgr.should_compress(large)
+
+    def test_microcompact_idle_trigger(self):
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager(micro_trigger_threshold=999, micro_idle_minutes=0)
+        mgr._last_active_at = 0
         msgs = [
-            {"role": "system", "content": "Base prompt"},
+            {"role": "system", "content": "Base"},
             {"role": "user", "content": "query"},
         ]
+        for i in range(20):
+            msgs.append({"role": "assistant", "content": f"step {i}",
+                         "tool_calls": [{"id": f"tc{i}", "function": {"name": "keyword_search", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"tc{i}",
+                         "content": f"result {i}" * 50})
+        result, events = mgr.compress(msgs)
+        assert any(e.layer == "microcompact" for e in events)
+
+    def test_microcompact_count_trigger(self):
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager(micro_trigger_threshold=3, micro_idle_minutes=999, micro_keep_recent=1)
+        msgs = [
+            {"role": "system", "content": "Base"},
+            {"role": "user", "content": "query"},
+        ]
+        for i in range(10):
+            msgs.append({"role": "assistant", "content": f"step {i}",
+                         "tool_calls": [{"id": f"tc{i}", "function": {"name": "keyword_search", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"tc{i}",
+                         "content": f"result {i}" * 50})
+        result, events = mgr.compress(msgs)
+        assert any(e.layer == "microcompact" for e in events)
+        cleared = sum(1 for m in result if isinstance(m.get("content"), str)
+                     and "Old tool result content cleared" in m["content"])
+        assert cleared > 0
+
+    def test_microcompact_skips_protected_tools(self):
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager(micro_trigger_threshold=3, micro_idle_minutes=999, micro_keep_recent=1)
+        msgs = [
+            {"role": "system", "content": "Base"},
+            {"role": "user", "content": "query"},
+        ]
+        # finish 调用不应被压缩
+        msgs.append({"role": "assistant", "content": "",
+                     "tool_calls": [{"id": "fin1", "function": {"name": "finish", "arguments": '{"answer":"done"}'}}]})
+        msgs.append({"role": "tool", "tool_call_id": "fin1",
+                     "content": '{"answer":"done"}'})
         for i in range(8):
-            msgs.append({"role": "assistant", "content": f"step {i}"})
-            msgs.append({"role": "tool", "content": f"[1] chunk_id=00{i} score=0.9\n    result"})
-        compressed, event = mgr.compress(msgs)
-        assert event.strategy == "summarize_old"
+            msgs.append({"role": "assistant", "content": f"step {i}",
+                         "tool_calls": [{"id": f"tc{i}", "function": {"name": "keyword_search", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"tc{i}",
+                         "content": f"result {i}" * 50})
+        result, events = mgr.compress(msgs)
+        finish_results = [m for m in result if m.get("tool_call_id") == "fin1"]
+        assert len(finish_results) == 1
+        assert "answer" in finish_results[0]["content"]
+
+    def test_snip_disabled_by_default(self):
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager()
+        msgs = [
+            {"role": "system", "content": "Base"},
+            {"role": "user", "content": "query"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "t1", "function": {"name": "keyword_search", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "t1", "content": "未找到相关结果"},
+        ]
+        result, events = mgr.compress(msgs)
+        assert len(result) == len(msgs)
+
+    def test_snip_removes_empty_results(self):
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager(snip_enabled=True, micro_trigger_threshold=999, micro_idle_minutes=999)
+        msgs = [
+            {"role": "system", "content": "Base"},
+            {"role": "user", "content": "query"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "t1", "function": {"name": "keyword_search", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "t1", "content": "共 0 条结果"},
+        ]
+        result, events = mgr.compress(msgs)
+        assert len(result) < len(msgs)
+        assert any(e.layer == "snip" for e in events)
+
+    def test_compression_pipeline_order(self):
+        """验证管线执行顺序：snip → microcompact → (session_memory / ai_summary)"""
+        from agents.agentic.context import ContextManager
+        mgr = ContextManager(
+            snip_enabled=True,
+            micro_trigger_threshold=1,
+            micro_idle_minutes=0,
+            sm_min_tokens=1,
+            sm_step_tokens=1,
+            max_tokens=100,
+            output_reserve=20,
+            compress_threshold=0.1,
+            circuit_breaker=5,
+        )
+        mgr._last_active_at = 0
+        msgs = [
+            {"role": "system", "content": "Base prompt " * 20},
+            {"role": "user", "content": "test query"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": "empty1", "function": {"name": "semantic_search", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": "empty1", "content": "未找到"},
+        ]
+        for i in range(10):
+            msgs.append({"role": "assistant", "content": f"step {i}",
+                         "tool_calls": [{"id": f"tc{i}", "function": {"name": "keyword_search", "arguments": "{}"}}]})
+            msgs.append({"role": "tool", "tool_call_id": f"tc{i}",
+                         "content": f"result {i} " * 30})
+        result, events = mgr.compress(msgs)
+
+        layers = [e.layer for e in events]
+        if "snip" in layers and "microcompact" in layers:
+            snip_idx = layers.index("snip")
+            mc_idx = layers.index("microcompact")
+            assert snip_idx < mc_idx, f"Expected snip before microcompact, got {layers}"
+        from agents.agentic.context import estimate_tokens
+        assert estimate_tokens(result) < estimate_tokens(msgs)
 
 
 class TestMemory:

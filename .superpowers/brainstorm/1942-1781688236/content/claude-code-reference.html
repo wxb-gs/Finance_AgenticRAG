@@ -1,0 +1,111 @@
+<h2>Claude Code 规划与执行模式 → 财报分析 Agent 映射</h2>
+<p class="subtitle">Claude Code 的规划是"追踪工具"而非"强制约束"，计划服务于对齐而非控制</p>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">Claude Code 模式</div>
+    <div class="mockup-body">
+      <h3>1. 规划阶段</h3>
+      <div class="section">
+        <span class="label">EnterPlanMode</span>
+        <p>探索代码库 → 写 plan 文件 → 用户审批 → 退出 plan mode</p>
+        <p style="color: var(--muted); font-size: 0.85em;">Plan 是上下文文件，不是执行约束</p>
+      </div>
+
+      <h3>2. 任务创建</h3>
+      <div class="section">
+        <span class="label">TaskCreate × N</span>
+        <p>每个步骤一个 task，支持 blocks/blockedBy 声明依赖</p>
+        <p style="color: var(--muted); font-size: 0.85em;">Task 有状态: pending → in_progress → completed</p>
+      </div>
+
+      <h3>3. 执行循环</h3>
+      <div class="section">
+        <p>检查 TaskList → 找下一个可执行的 → TaskUpdate(in_progress) → 执行 → TaskUpdate(completed)</p>
+        <p style="color: var(--muted); font-size: 0.85em;">独立任务通过 dispatch_subagent 并行执行</p>
+      </div>
+
+      <h3>4. 自适应</h3>
+      <div class="section">
+        <p>执行中发现问题 → 更新 plan → 增减 task → 继续执行</p>
+        <p style="color: var(--muted); font-size: 0.85em;">计划是活的，不是写死的</p>
+      </div>
+
+      <h3>5. 代码执行</h3>
+      <div class="section">
+        <span class="label">Bash 工具</span>
+        <p>写脚本 → 执行 → 读输出 → 基于结果继续推理</p>
+        <p style="color: var(--muted); font-size: 0.85em;">模型决定何时需要写代码，不是预先配置</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="mockup">
+    <div class="mockup-header">财报分析 Agent 映射</div>
+    <div class="mockup-body">
+      <h3>1. 规划阶段</h3>
+      <div class="section">
+        <span class="label">plan_query 工具升级</span>
+        <p>模型生成结构化 Plan 对象（含步骤 + 依赖 + 预期工具）→ 写入 trace</p>
+        <p style="color: var(--muted); font-size: 0.85em;">可评测：计划是否合理？是否覆盖了所有跳？</p>
+      </div>
+
+      <h3>2. 任务创建</h3>
+      <div class="section">
+        <span class="label">PlanStep → SubAgentTask</span>
+        <p>每个 step 对应一个可追踪的子任务，支持依赖声明</p>
+        <p style="color: var(--muted); font-size: 0.85em;">例如：step_3 获取行业均值" 依赖 step_2 获取宁德时代数据"</p>
+      </div>
+
+      <h3>3. 执行循环</h3>
+      <div class="section">
+        <p>主 Agent 按依赖顺序派发：无依赖的并行跑，有依赖的等待</p>
+        <p style="color: var(--muted); font-size: 0.85em;">三种子Agent: retrieval / computation / comparison</p>
+      </div>
+
+      <h3>4. 自适应</h3>
+      <div class="section">
+        <p>检索中发现新实体/新指标 → 追加 step → 继续执行</p>
+        <p style="color: var(--muted); font-size: 0.85em;">跟 Claude Code 一样，计划随执行动态调整</p>
+      </div>
+
+      <h3>5. Python 脚本执行</h3>
+      <div class="section">
+        <span class="label">execute_python 工具 (NEW)</span>
+        <p>模型写 Python → 沙箱执行（pandas/numpy 可用）→ 返回结果</p>
+        <p style="color: var(--muted); font-size: 0.85em;">替代当前 computation 子Agent 的"纯 LLM 计算"</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>核心差异：现在 vs 目标</h3>
+  <table style="width:100%; border-collapse: collapse;">
+    <tr style="background: var(--surface);">
+      <th style="padding: 8px 12px; text-align: left;">维度</th>
+      <th style="padding: 8px 12px; text-align: left;">现在</th>
+      <th style="padding: 8px 12px; text-align: left;">目标</th>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">规划</td>
+      <td style="padding: 8px 12px;">plan_steps 列个清单，模型后续随意发挥</td>
+      <td style="padding: 8px 12px;">Plan 对象带依赖图，任务可追踪，可评测</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">子Agent执行</td>
+      <td style="padding: 8px 12px;">模型手动 dispatch，无依赖管理</td>
+      <td style="padding: 8px 12px;">按 Plan 依赖自动调度，无依赖的并行、有依赖的串行</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">数值计算</td>
+      <td style="padding: 8px 12px;">computation 子Agent 纯 LLM 计算（不可靠）</td>
+      <td style="padding: 8px 12px;">execute_python 沙箱执行（精确、可复现）</td>
+    </tr>
+    <tr>
+      <td style="padding: 8px 12px;">计划可观测</td>
+      <td style="padding: 8px 12px;">无</td>
+      <td style="padding: 8px 12px;">Plan 写入 trace，可评测规划合理性</td>
+    </tr>
+  </table>
+</div>

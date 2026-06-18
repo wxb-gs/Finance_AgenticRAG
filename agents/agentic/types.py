@@ -33,11 +33,22 @@ class ToolResult:
 
 @dataclass
 class CompressionEvent:
-    """一次上下文压缩事件"""
+    """一次压缩事件"""
+    layer: Literal["snip", "microcompact", "session_memory", "ai_summary"]
     before_tokens: int
     after_tokens: int
-    strategy: Literal["aggressive", "summarize_old", "preserve_recent"]
-    summary: str = ""
+    messages_removed: int = 0
+    timestamp: float = field(default_factory=time.time)
+
+
+@dataclass
+class CompactBoundary:
+    """Session Memory 折叠边界元数据"""
+    fold_count: int
+    collapsed_msg_count: int
+    pre_tokens: int
+    post_tokens: int
+    timestamp: float = field(default_factory=time.time)
 
 
 @dataclass
@@ -83,7 +94,7 @@ class AgentState:
             "subagent_count": self.subagent_count,
             "memories_used": self.memories_used,
             "compression_events": [
-                {"strategy": e.strategy, "before": e.before_tokens, "after": e.after_tokens}
+                {"layer": e.layer, "before": e.before_tokens, "after": e.after_tokens}
                 for e in self.compression_events
             ],
         }

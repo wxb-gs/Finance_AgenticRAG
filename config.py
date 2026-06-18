@@ -51,6 +51,20 @@ AGENT_CONFIG = {
     "agent_enable_subagents": os.environ.get("AGENT_ENABLE_SUBAGENTS", "true").lower() == "true",
     "pev_enable_verifier": True,
     "pev_enabled_tools": None,
+
+    # ── 上下文压缩配置 ──
+    "context_max_tokens": int(os.environ.get("CONTEXT_MAX_TOKENS", "32768")),
+    "context_compress_threshold": float(os.environ.get("CONTEXT_COMPRESS_THRESHOLD", "0.75")),
+    "context_output_reserve": int(os.environ.get("CONTEXT_OUTPUT_RESERVE", "4096")),
+    "context_snip_enabled": os.environ.get("CONTEXT_SNIP_ENABLED", "false").lower() == "true",
+    "context_micro_keep_recent": int(os.environ.get("CONTEXT_MICRO_KEEP_RECENT", "5")),
+    "context_micro_trigger_threshold": int(os.environ.get("CONTEXT_MICRO_TRIGGER_THRESHOLD", "10")),
+    "context_micro_idle_minutes": int(os.environ.get("CONTEXT_MICRO_IDLE_MINUTES", "60")),
+    "context_sm_min_tokens": int(os.environ.get("CONTEXT_SM_MIN_TOKENS", "10000")),
+    "context_sm_step_tokens": int(os.environ.get("CONTEXT_SM_STEP_TOKENS", "5000")),
+    "context_sm_keep_recent": int(os.environ.get("CONTEXT_SM_KEEP_RECENT", "8")),
+    "context_summary_max_tokens": int(os.environ.get("CONTEXT_SUMMARY_MAX_TOKENS", "4000")),
+    "context_circuit_breaker": int(os.environ.get("CONTEXT_CIRCUIT_BREAKER", "3")),
 }
 
 # ── MCP Client 配置 ──

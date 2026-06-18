@@ -1,0 +1,141 @@
+<h2>子系统 1：Python MCP Server</h2>
+<p class="subtitle">独立 stdio 进程，提供 execute_python 工具，与 SQLite MCP Server 完全一致的架构模式</p>
+
+<div class="section">
+  <h3>Tool Schema</h3>
+  <div class="mockup">
+    <div class="mockup-header">MCP Tool: execute_python</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.82em; line-height: 1.6;">
+{
+  "name": "execute_python",
+  "description": "在沙箱中执行 Python 代码并返回结果。\
+用于精确财务计算、统计分析、数据处理。\
+支持 pandas, numpy, scipy, math, statistics, json。",
+  "parameters": {
+    "code": {
+      "type": "string",
+      "description": "Python 代码。最后一行如果是表达式会自动打印。\
+用 print() 输出结果，或赋值给 __result__ 字典返回结构化数据。"
+    },
+    "context": {
+      "type": "object",
+      "description": "可选。传入上下文字典，代码中可直接作为变量访问。\
+例如 {\"revenue\": 292.0, \"cost\": 218.0}"
+    },
+    "timeout": {
+      "type": "integer",
+      "description": "超时秒数，默认 30，最大 60"
+    }
+  },
+  "required": ["code"]
+}
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>执行流程</h3>
+  <div class="mockup">
+    <div class="mockup-header">Agent → MCP Client → Python Server (子进程) → 返回</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.82em; line-height: 1.8;">
+Agent (ReAct 循环)
+  │
+  │ tool_call: execute_python(code="...", context={...})
+  ▼
+ToolRegistry._exec_mcp("mcp__python_default__execute_python", args)
+  │
+  │ MCPClient.call_tool("execute_python", args)
+  │ stdio transport → Python MCP Server (独立子进程)
+  ▼
+┌─────────────────────────────────────────────────┐
+│  Python MCP Server 内部                          │
+│                                                  │
+│  1. 接收 code + context                          │
+│  2. 在受限子进程中执行:                           │
+│     ┌──────────────────────────────────────┐    │
+│     │ subprocess.run(                      │    │
+│     │   [sys.executable, "-c", code],      │    │
+│     │   timeout=30,                        │    │
+│     │   capture_output=True,               │    │
+│     │   env={..., "PYTHONPATH": restricted} │    │
+│     │ )                                     │    │
+│     └──────────────────────────────────────┘    │
+│  3. 收集 stdout, stderr, returncode              │
+│  4. 返回结构化结果                                │
+└─────────────────────────────────────────────────┘
+  │
+  │ 返回 JSON:
+  ▼
+{
+  "success": true,
+  "stdout": "ROE=0.1820\nNPM=0.1233\nTAT=0.9125\nEM=1.6162\n",
+  "stderr": "",
+  "result": {"roe": 0.182, "npm": 0.1233, "tat": 0.9125, "em": 1.6162},
+  "execution_time_ms": 234
+}
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="split">
+  <div class="mockup">
+    <div class="mockup-header">可用库（白名单）</div>
+    <div class="mockup-body">
+      <table style="width:100%">
+        <tr><td><code>pandas</code></td><td>DataFrame 操作、数据聚合</td></tr>
+        <tr><td><code>numpy</code></td><td>数值计算、矩阵运算</td></tr>
+        <tr><td><code>scipy.stats</code></td><td>统计检验、分布计算</td></tr>
+        <tr><td><code>math</code></td><td>基础数学函数</td></tr>
+        <tr><td><code>statistics</code></td><td>均值、方差、中位数</td></tr>
+        <tr><td><code>json</code></td><td>数据序列化</td></tr>
+        <tr><td><code>datetime</code></td><td>日期计算</td></tr>
+        <tr><td><code>collections</code></td><td>数据结构工具</td></tr>
+        <tr><td><code>itertools</code></td><td>迭代工具</td></tr>
+        <tr><td><code>functools</code></td><td>函数工具</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="mockup">
+    <div class="mockup-header">安全约束</div>
+    <div class="mockup-body">
+      <table style="width:100%">
+        <tr><td><code>subprocess 隔离</code></td><td>独立子进程，崩溃不影响主进程</td></tr>
+        <tr><td><code>timeout=30s</code></td><td>超时强制 kill，防止死循环</td></tr>
+        <tr><td><code>无网络</code></td><td>子进程环境无 HTTP 访问能力</td></tr>
+        <tr><td><code>无文件写</code></td><td>只能读 /tmp，不可写文件系统</td></tr>
+        <tr><td><code>白名单 import</code></td><td>只允许上述库，os/sys/subprocess 等被拦截</td></tr>
+        <tr><td><code>内存限制</code></td><td>500MB 上限，超出被 OS kill</td></tr>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>配置集成</h3>
+  <div class="mockup">
+    <div class="mockup-header">config.py 新增 + MCP_SERVERS 自动发现</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.85em;">
+# config.py
+PYTHON_MCP_SERVER = {
+    "name": "python_default",
+    "transport": "stdio",
+    "command": "python",
+    "args": ["-m", "mcp_servers.python_server"],
+    "cwd": os.path.dirname(os.path.abspath(__file__)),
+    "env": {
+        "PYTHON_MCP_TIMEOUT": "30",
+        "PYTHON_MCP_MAX_MEMORY_MB": "500",
+    }
+}
+
+# MCP_SERVERS 环境变量自动合并 PYTHON_MCP_SERVER
+# 在 Agent._run() 初始化时由 ToolRegistry.discover_mcp() 自动连接
+      </pre>
+    </div>
+  </div>
+</div>

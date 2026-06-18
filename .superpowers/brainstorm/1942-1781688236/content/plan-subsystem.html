@@ -1,0 +1,173 @@
+<h2>子系统 2：Plan 规划器</h2>
+<p class="subtitle">Claude Code 风格——Plan 是追踪工具 + 对齐手段，不是硬约束。模型参考 Plan 执行，但保留自主决策权。</p>
+
+<div class="section">
+  <h3>核心原则</h3>
+  <div class="mockup">
+    <div class="mockup-header">Plan 的角色：三件事</div>
+    <div class="mockup-body">
+      <ol style="line-height: 2;">
+        <li><strong>结构化分解</strong> — 多跳查询 → 带依赖关系的步骤图，模型不用纯靠脑记</li>
+        <li><strong>可评测追踪</strong> — Plan 写入 trace，评测时直接判断"规划是否合理、是否覆盖所有推理跳"</li>
+        <li><strong>对齐辅助</strong> — 模型每轮看到 Plan 的状态，辅助判断"下一步该做什么"</li>
+      </ol>
+      <p style="color: var(--muted); margin-top: 12px;">
+        不是：代码自动按 DAG 调度执行（像 PEV）
+        而是：模型读 Plan → 模型决定派发 → 模型可以中途改 Plan
+      </p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>数据结构</h3>
+  <div class="mockup">
+    <div class="mockup-header">types.py 新增</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.82em; line-height: 1.6;">
+@dataclass
+class PlanStep:
+    """计划中的单个步骤"""
+    id: str                          # "step_1"
+    description: str                 # "获取宁德时代 2024Q3 利润表"
+    depends_on: list[str] = field(default_factory=list)  # ["step_3"]
+    agent_type: Literal["retrieval", "computation", "comparison"] = "retrieval"
+    status: Literal["pending", "in_progress", "completed", "failed"] = "pending"
+    result_summary: str = ""
+
+@dataclass
+class Plan:
+    """多跳查询的结构化计划"""
+    query: str                       # 原始查询
+    steps: list[PlanStep]            # 步骤列表
+    version: int = 1                 # 计划版本（中途修改时递增）
+    created_at: float = 0.0
+    updated_at: float = 0.0
+
+    def ready_steps(self) -> list[PlanStep]:
+        """返回所有依赖已满足且未开始的步骤"""
+        completed = {s.id for s in self.steps if s.status == "completed"}
+        return [s for s in self.steps
+                if s.status == "pending"
+                and set(s.depends_on).issubset(completed)]
+
+    def all_done(self) -> bool:
+        return all(s.status in ("completed", "failed") for s in self.steps)
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>工具设计</h3>
+  <div class="split">
+    <div class="mockup">
+      <div class="mockup-header">plan_query (替代 plan_steps)</div>
+      <div class="mockup-body">
+        <pre style="margin:0; font-size: 0.8em;">
+{
+  "name": "plan_query",
+  "category": "meta",
+  "description": "为复杂多跳查询生成结构化执行计划",
+  "when_to_use": "3跳+ 的复杂查询，需要预先分解",
+  "parameters": {
+    "steps": [{
+      "id": "step_1",
+      "description": "...",
+      "depends_on": [],
+      "agent_type": "retrieval"
+    }, ...]
+  }
+}
+        </pre>
+        <p style="font-size: 0.85em; color: var(--muted);">
+          模型调用 plan_query → Plan 对象存入 AgentState → 出现在 trace 中
+        </p>
+      </div>
+    </div>
+    <div class="mockup">
+      <div class="mockup-header">plan_update (新增)</div>
+      <div class="mockup-body">
+        <pre style="margin:0; font-size: 0.8em;">
+{
+  "name": "plan_update",
+  "category": "meta",
+  "description": "更新计划步骤状态或追加新步骤",
+  "when_to_use": "步骤完成时标记、发现新信息需追加步骤",
+  "parameters": {
+    "action": "complete|fail|append|revise",
+    "step_id": "step_4",
+    "result_summary": "DuPont ROE=18.2%...",
+    "new_steps": [...]  // append 时使用
+  }
+}
+        </pre>
+        <p style="font-size: 0.85em; color: var(--muted);">
+          执行中发现新实体/新指标 → 追加步骤 → Plan 版本号递增
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Agent 循环中的 Plan 集成</h3>
+  <div class="mockup">
+    <div class="mockup-header">agent.py run() 改动：新增 PlanPhase</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.82em; line-height: 1.7;">
+def run(self, query: str) -> AgentResult:
+    state = AgentState(query=query)
+
+    # 0-1. MCP 初始化、记忆召回、System Prompt (不变)
+
+    # === 新增：Plan Phase ===
+    # 首轮 LLM 调用，判断是否需要生成 Plan
+    # 模型可以选择直接回答、生成 Plan、或先搜再 Plan
+    # Plan 存储在 state.plan 中
+
+    # === ReAct 循环 (扩展) ===
+    while state.iterations < self.max_iterations and not state.finished:
+
+        # 上下文压缩检查 (不变)
+
+        # LLM 调用 — System Prompt 中注入 Plan 状态
+        # "当前计划状态: step_1=completed, step_2=in_progress, step_3=pending"
+        # 模型据此自主判断下一步
+
+        # 工具调用分发 (扩展):
+        #   plan_query   → 生成 Plan 对象，写入 state
+        #   plan_update  → 更新 step 状态或追加步骤
+        #   dispatch_subagent → 派发时关联 step_id，完成时自动更新 Plan
+        #   finish       → 不变
+        #   检索工具     → 不变
+        #   execute_python → 通过 MCP 执行 (新增)
+
+        # 停止条件: 连续 3 轮无工具调用 或 Plan 全部完成 或 max_iterations
+
+    # Plan 写入 trace，包含在 AgentResult 中
+      </pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h3>Plan 如何出现在 System Prompt 中</h3>
+  <div class="mockup">
+    <div class="mockup-header">每轮 LLM 调用前动态注入 Plan 状态</div>
+    <div class="mockup-body">
+      <pre style="margin:0; font-size: 0.85em;">
+[当前计划] (版本 1)
+  1. [completed] 获取宁德时代利润表 → 营收 292亿, 净利润 36亿
+  2. [completed] 获取宁德时代资产负债表 → 总资产 320亿, 净资产 198亿
+  3. [completed] 获取行业平均数据 → 行业ROE均值 12.7%
+  4. [pending]   DuPont ROE 分解计算 ← 依赖: [1, 2]
+  5. [pending]   行业对比计算 ← 依赖: [3, 4]
+  6. [pending]   综合结论 ← 依赖: [4, 5]
+
+提示: 可并行派发的步骤: [4]
+      等待依赖的步骤: [5] (等待 4), [6] (等待 4, 5)
+      </pre>
+    </div>
+  </div>
+</div>

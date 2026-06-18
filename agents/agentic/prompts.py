@@ -233,3 +233,120 @@ If the system is connected to external MCP Servers, the tool list will include t
 These tools are provided by external systems. Common examples: execute_python, sql_query, list_tables, etc.
 Use them normally like any other tool.
 """
+
+
+# ══════════════════════════════════════════════════════════════════
+# 上下文压缩 Prompt 模板
+# ══════════════════════════════════════════════════════════════════
+
+def _format_messages_for_summary(messages: list[dict]) -> str:
+    """将消息列表格式化为 LLM 可读的文本"""
+    lines = []
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "unknown")
+        content = msg.get("content", "")
+
+        if role == "system":
+            lines.append(f"[{i}] system: {content[:200]}")
+        elif role == "user":
+            lines.append(f"[{i}] user: {content[:500]}")
+        elif role == "assistant":
+            if msg.get("tool_calls"):
+                tools = [tc.get("function", {}).get("name", "?") for tc in msg["tool_calls"]]
+                lines.append(f"[{i}] assistant: calls {tools}")
+                if content:
+                    lines.append(f"  reasoning: {content[:200]}")
+            else:
+                lines.append(f"[{i}] assistant: {content[:300]}")
+        elif role == "tool":
+            tc_id = msg.get("tool_call_id", "")[:8]
+            lines.append(f"[{i}] tool_result({tc_id}): {content[:300]}")
+    return "\n".join(lines)
+
+
+def build_sm_summary_prompt(messages: list[dict], fold_index: int, language: str = "zh") -> str:
+    """构建 Layer 3 Session Memory 增量摘要 prompt
+
+    Args:
+        messages: 本轮要折叠的消息段
+        fold_index: 第几次折叠（1-based）
+        language: zh | en
+    """
+    conversation_text = _format_messages_for_summary(messages)
+
+    if language == "zh":
+        return f"""你是对话摘要助手。请将以下对话片段压缩为结构化摘要。
+
+这是第 {fold_index} 次增量折叠，只描述本段新增内容。
+
+<对话片段>
+{conversation_text}
+</对话片段>
+
+输出精简摘要（150字以内）：
+- 本段执行的检索工具及参数
+- 新发现的关键数据/证据
+- 新出现的矛盾或信息缺口
+- 当前推理方向"""
+
+    return f"""You are a conversation summarizer. Compress the following conversation segment into a structured summary.
+
+This is incremental fold #{fold_index}. Only describe what's NEW in this segment.
+
+<conversation>
+{conversation_text}
+</conversation>
+
+Output a concise summary:
+- Retrieval tools called in this segment with parameters
+- New key data/evidence discovered
+- New contradictions or information gaps
+- Current reasoning direction"""
+
+
+def build_ai_summary_prompt(messages: list[dict], language: str = "zh") -> str:
+    """构建 Layer 4 AI Summary 9 段全量摘要 prompt"""
+    conversation_text = _format_messages_for_summary(messages)
+
+    if language == "zh":
+        return f"""你是对话摘要助手。你需要将整个对话历史压缩为结构化摘要，保留所有关键信息。
+
+重要：先输出 <analysis> 块做按时间线的对话分析（该块不会被保留），再输出 <summary> 块。
+
+<对话历史>
+{conversation_text}
+</对话历史>
+
+<summary> 必须包含以下 9 段：
+### 1. 原始查询与意图
+### 2. 关键金融概念
+### 3. 已检索的文件与数据（含 chunk_id + 完整证据片段）
+### 4. 发现的数据矛盾与处理
+### 5. 已解决的问题
+### 6. 所有用户消息（逐字保留）
+### 7. 待完成任务
+### 8. 当前工作（压缩前正在做的事，含具体文件名/代码片段/证据）
+### 9. 下一步建议（引用对话原文作为依据）
+
+禁止调用任何工具。直接输出分析文本。"""
+
+    return f"""You are a conversation summarizer. Compress the entire conversation history into a structured summary preserving all critical information.
+
+Important: First output an <analysis> block with chronological conversation analysis (this block will not be retained), then output the <summary> block.
+
+<conversation>
+{conversation_text}
+</conversation>
+
+<summary> must contain these 9 sections:
+### 1. Primary Request and Intent
+### 2. Key Financial Concepts
+### 3. Files and Data Retrieved (with chunk_id + full evidence snippets)
+### 4. Data Contradictions Discovered and How They Were Handled
+### 5. Problems Solved
+### 6. All User Messages (verbatim)
+### 7. Pending Tasks
+### 8. Current Work (what was being worked on before compaction, with specific filenames/code/evidence)
+### 9. Next Step (with direct quotes from conversation as justification)
+
+Do NOT call any tools. Output analysis text directly."""
