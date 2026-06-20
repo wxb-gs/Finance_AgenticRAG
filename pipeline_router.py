@@ -50,39 +50,60 @@ class PipelineRouter:
         return self._agent
 
     def run(self, query: str, mode: str | None = None) -> dict:
-        mode = mode or self.default_mode
-        if mode == "pev":
-            return self._run_pev(query)
-        elif mode == "agent":
-            return self._run_agent(query)
-        elif mode == "compare":
-            return self._run_both(query)
-        else:
-            raise ValueError(f"Unknown mode: {mode} (expected pev/agent/compare)")
+        from config import LANGFUSE_ENABLED, AGENT_LLM_MODEL
+        from monitoring.tracer import Tracer
 
-    def _run_agent(self, query: str) -> dict:
+        mode = mode or self.default_mode
+        tracer = Tracer(enabled=LANGFUSE_ENABLED)
+        tracer.start_trace(query=query, mode=mode, model=AGENT_LLM_MODEL)
+
+        try:
+            if mode == "pev":
+                return self._run_pev(query, tracer)
+            elif mode == "agent":
+                return self._run_agent(query, tracer)
+            elif mode == "compare":
+                return self._run_both(query, tracer)
+            else:
+                raise ValueError(f"Unknown mode: {mode} (expected pev/agent/compare)")
+        except Exception as e:
+            tracer.end_trace(error=e)
+            tracer.flush()
+            raise
+
+    def _run_agent(self, query: str, tracer=None) -> dict:
         t0 = time.time()
-        result = self.agent.run(query)
+        result = self.agent.run(query, tracer=tracer)
         latency = time.time() - t0
-        return {
+        trace_id = result.trace_id
+
+        output = {
             "mode": "agent",
             "answer": result.answer,
             "iterations": result.iterations,
             "total_tool_calls": result.total_tool_calls,
             "trace": result.trace,
             "latency_ms": round(latency * 1000, 2),
+            "trace_id": trace_id,
             "metadata": {
                 "skills_activated": result.skills_used,
                 "subagents_dispatched": result.subagent_count,
                 "memories_recalled": result.memories_used,
                 "compression_events": [
-                    {"strategy": e.strategy, "before": e.before_tokens, "after": e.after_tokens}
+                    {"strategy": e.layer, "before": e.before_tokens, "after": e.after_tokens}
                     for e in result.compression_events
                 ],
+                "no_tool_streak": result.no_tool_streak,
+                "premature_finish": result.premature_finish,
+                "plan_steps_count": result.plan_steps_count,
             },
         }
 
-    def _run_pev(self, query: str) -> dict:
+        if tracer:
+            tracer.end_trace(result)
+        return output
+
+    def _run_pev(self, query: str, tracer=None) -> dict:
         from agents.pev.graph import build_graph, run_query
         t0 = time.time()
         graph = build_graph(
@@ -99,6 +120,8 @@ class PipelineRouter:
                 "tool": e.get("tool"),
                 "num_results": len(e.get("results", [])),
             })
+        if tracer:
+            tracer.end_trace()
         return {
             "mode": "pev",
             "answer": state.get("final_answer", ""),
@@ -113,9 +136,9 @@ class PipelineRouter:
             },
         }
 
-    def _run_both(self, query: str) -> dict:
-        pev_result = self._run_pev(query)
-        agent_result = self._run_agent(query)
+    def _run_both(self, query: str, tracer=None) -> dict:
+        pev_result = self._run_pev(query, tracer=None)
+        agent_result = self._run_agent(query, tracer=tracer)
         return {
             "mode": "compare",
             "query": query,
