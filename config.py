@@ -91,3 +91,11 @@ if _mcp_override:
             MCP_SERVERS = _json.load(_f)
     else:
         MCP_SERVERS = _json.loads(_mcp_override)
+
+# ── Langfuse 监控配置 ──
+LANGFUSE_ENABLED = os.environ.get("LANGFUSE_ENABLED", "false").lower() == "true"
+LANGFUSE_HOST = os.environ.get("LANGFUSE_HOST", "http://localhost:3000")
+LANGFUSE_PUBLIC_KEY = os.environ.get("LANGFUSE_PUBLIC_KEY", "")
+LANGFUSE_SECRET_KEY = os.environ.get("LANGFUSE_SECRET_KEY", "")
+LANGFUSE_FLUSH_INTERVAL = int(os.environ.get("LANGFUSE_FLUSH_INTERVAL", "5"))
+LANGFUSE_SAMPLE_RATE = float(os.environ.get("LANGFUSE_SAMPLE_RATE", "1.0"))
