@@ -8,7 +8,7 @@ from pathlib import Path
 from agents.agentic.types import AgentState, AgentResult, ToolCall, ToolResult, Plan, PlanStep
 from agents.agentic.tools import ToolRegistry
 from agents.agentic.skills import SkillManager
-from agents.agentic.context import ContextManager
+from agents.agentic.context import ContextManager, estimate_tokens
 from agents.agentic.memory import MemoryManager
 
 
@@ -46,8 +46,11 @@ class Agent:
             circuit_breaker=AGENT_CONFIG.get("context_circuit_breaker", 3),
         )
 
-    def run(self, query: str) -> AgentResult:
+    def run(self, query: str, tracer=None) -> AgentResult:
         """执行 Agent 主循环"""
+        from monitoring.tracer import Tracer
+        tracer = tracer or Tracer.noop()
+
         state = AgentState(query=query)
 
         # 0. 初始化 MCP 连接（首次运行）
@@ -61,6 +64,8 @@ class Agent:
         # 1. 召回相关记忆
         recalled = self.memory.recall(query, top_k=3)
         state.memories_used = len(recalled)
+        # 埋点: 记忆召回
+        tracer.log_recall(len(recalled))
         memory_context = ""
         if recalled:
             memory_context = "\n\n[相关历史记忆]\n" + "\n".join(
@@ -99,13 +104,38 @@ class Agent:
             # 上下文压缩检查
             self.context.touch()
             if self.context.should_compress(messages):
+                tokens_before = estimate_tokens(messages)
                 messages, events = self.context.compress(messages)
                 state.compression_events.extend(events)
+                tokens_after = estimate_tokens(messages)
+                # 埋点: 压缩事件
+                for evt in events:
+                    tracer.log_compression(
+                        layer=evt.layer,
+                        tokens_before=tokens_before,
+                        tokens_after=tokens_after,
+                        messages_removed=getattr(evt, 'messages_removed', 0),
+                    )
+
+            # 埋点: 迭代开始
+            tracer.start_iteration(state.iterations)
 
             # LLM 调用
             # 每次 LLM 调用前注入最新 Plan 状态
             current_messages = _build_messages_with_plan(messages, state)
+            t_llm_start = time.time()
             response = self._chat(current_messages, tool_schemas)
+            t_llm_end = time.time()
+
+            # 埋点: LLM Generation
+            model_name = self.model_config.model_name if self.model_config else "Qwen3-32B"
+            tracer.log_generation(
+                model=model_name,
+                messages_count=len(current_messages),
+                tool_calls_count=len(response.get("tool_calls", [])),
+                latency_ms=(t_llm_end - t_llm_start) * 1000,
+                has_tool_calls=bool(response.get("tool_calls")),
+            )
 
             if response.get("tool_calls"):
                 no_tool_streak = 0
@@ -126,6 +156,7 @@ class Agent:
                     )
 
                     if call.name == "finish":
+                        t0 = time.time()
                         result = ToolResult(
                             call_id=call.id, tool_name="finish",
                             success=True,
@@ -140,9 +171,17 @@ class Agent:
                             "tool_call_id": call.id,
                             "content": result.content,
                         })
+                        tracer.log_tool_call(
+                            tool_name=call.name, args=call.args,
+                            result_content=result.content, success=True,
+                            confidence=result.confidence,
+                            latency_ms=(time.time() - t0) * 1000,
+                            is_empty=False,
+                        )
                         break
 
                     elif call.name == "dispatch_subagent" and self.enable_subagents:
+                        t0 = time.time()
                         step_id = call.args.get("step_id")
                         if step_id and state.plan:
                             state.plan.mark_step(step_id, "in_progress")
@@ -167,8 +206,21 @@ class Agent:
                             "tool_call_id": call.id,
                             "content": result.content,
                         })
+                        tracer.log_tool_call(
+                            tool_name=call.name, args=call.args,
+                            result_content=result.content, success=True,
+                            confidence=1.0,
+                            latency_ms=(time.time() - t0) * 1000,
+                            is_empty=False,
+                        )
+                        tracer.log_subagent(
+                            sub_type=call.args.get("agent_type", "retrieval"),
+                            task=call.args.get("task", ""),
+                            iterations=sub_result.get("iterations", 0),
+                        )
 
                     elif call.name == "activate_skill":
+                        t0 = time.time()
                         skill = self.skills.activate(call.args.get("skill_name", ""))
                         result = ToolResult(
                             call_id=call.id, tool_name=call.name,
@@ -185,8 +237,16 @@ class Agent:
                             "tool_call_id": call.id,
                             "content": result.content,
                         })
+                        tracer.log_tool_call(
+                            tool_name=call.name, args=call.args,
+                            result_content=result.content, success=result.success,
+                            confidence=1.0,
+                            latency_ms=(time.time() - t0) * 1000,
+                            is_empty=False,
+                        )
 
                     elif call.name == "remember":
+                        t0 = time.time()
                         self.memory.save(
                             content=call.args["content"],
                             mem_type=call.args.get("type", "evidence"),
@@ -202,8 +262,16 @@ class Agent:
                             "tool_call_id": call.id,
                             "content": "Memory saved.",
                         })
+                        tracer.log_tool_call(
+                            tool_name=call.name, args=call.args,
+                            result_content=result.content, success=True,
+                            confidence=1.0,
+                            latency_ms=(time.time() - t0) * 1000,
+                            is_empty=False,
+                        )
 
                     elif call.name == "plan_query":
+                        t0 = time.time()
                         steps_data = call.args.get("steps", [])
                         plan_steps = [
                             PlanStep(
@@ -229,8 +297,16 @@ class Agent:
                             "tool_call_id": call.id,
                             "content": result.content,
                         })
+                        tracer.log_tool_call(
+                            tool_name=call.name, args=call.args,
+                            result_content=result.content, success=True,
+                            confidence=1.0,
+                            latency_ms=(time.time() - t0) * 1000,
+                            is_empty=False,
+                        )
 
                     elif call.name == "plan_update":
+                        t0 = time.time()
                         action = call.args.get("action", "")
                         step_id = call.args.get("step_id", "")
                         result_content = f"Plan updated: action={action}"
@@ -268,8 +344,16 @@ class Agent:
                             "tool_call_id": call.id,
                             "content": result.content,
                         })
+                        tracer.log_tool_call(
+                            tool_name=call.name, args=call.args,
+                            result_content=result.content, success=True,
+                            confidence=1.0,
+                            latency_ms=(time.time() - t0) * 1000,
+                            is_empty=False,
+                        )
 
                     else:
+                        t0 = time.time()
                         # 检索工具
                         result = self.tools.execute(call)
                         state.add_tool_call(call, result)
@@ -287,6 +371,13 @@ class Agent:
                             "tool_call_id": call.id,
                             "content": result.content,
                         })
+                        tracer.log_tool_call(
+                            tool_name=call.name, args=call.args,
+                            result_content=result.content, success=result.success,
+                            confidence=result.confidence,
+                            latency_ms=(time.time() - t0) * 1000,
+                            is_empty=result.is_empty,
+                        )
 
             else:
                 # 纯文本响应（推理）
@@ -300,6 +391,13 @@ class Agent:
                 if not state.final_answer:
                     state.final_answer = self._force_answer(messages)
                 state.finished = True
+                state._finished_by_streak = True
+
+            # 埋点: 迭代结束
+            tracer.end_iteration(metadata={
+                "no_tool_streak": no_tool_streak,
+                "finished": state.finished,
+            })
 
         # 5. 兜底：达到最大迭代仍未 finish
         if not state.final_answer:
@@ -317,6 +415,10 @@ class Agent:
             subagent_count=state.subagent_count,
             memories_used=state.memories_used,
             compression_events=state.compression_events,
+            trace_id=getattr(tracer, '_trace_id', '') or '',
+            no_tool_streak=no_tool_streak,
+            premature_finish=getattr(state, '_finished_by_streak', False),
+            plan_steps_count=len(state.plan.steps) if state.plan else 0,
         )
 
     def _chat(self, messages: list[dict], tools: list[dict]) -> dict:

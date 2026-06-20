@@ -112,6 +112,10 @@ class AgentResult:
     subagent_count: int
     memories_used: int
     compression_events: list[CompressionEvent]
+    trace_id: str = ""                      # Langfuse trace ID
+    no_tool_streak: int = 0                 # 最长连续无工具轮次
+    premature_finish: bool = False          # 是否过早终止（非 finish 工具触发）
+    plan_steps_count: int = 0               # 计划步骤数
     evidence_summary: list[dict[str, Any]] = field(default_factory=list)
 
 
